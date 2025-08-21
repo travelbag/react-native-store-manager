@@ -14,8 +14,10 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "This app needs access to the camera to scan product barcodes for order fulfillment."
-      }
+        "NSCameraUsageDescription": "This app needs access to the camera to scan product barcodes for order fulfillment.",
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "bundleIdentifier": "com.littlekart1.reactnativestoremanager"
     },
     "android": {
       "adaptiveIcon": {
@@ -24,31 +26,33 @@
       },
       "edgeToEdgeEnabled": true,
       "permissions": [
-        "CAMERA"
-      ]
+        "CAMERA",
+        "android.permission.CAMERA",
+        "CAMERA",
+        "android.permission.CAMERA"
+      ],
+      "package": "com.littlekart1.reactnativestoremanager"
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
       [
-        "expo-barcode-scanner",
-        {
-          "cameraPermission": "Allow $(PRODUCT_NAME) to access camera to scan barcodes for order fulfillment."
-        }
-      ],
-      [
         "expo-notifications",
         {
           "icon": "./assets/icon.png",
-          "color": "#ffffff",
-          "sounds": ["./assets/notification.wav"]
+          "color": "#ffffff"
         }
       ]
     ],
     "notification": {
       "icon": "./assets/icon.png",
       "color": "#000000"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "10a3d584-9a81-43d2-8863-60ab982f1d87"
+      }
     }
   }
 }

@@ -13,8 +13,10 @@ import { Ionicons } from '@expo/vector-icons';
 // Try to import BarCodeScanner, fall back to manual entry if not available
 let BarCodeScanner;
 try {
-  const BarcodeModule = require('expo-barcode-scanner');
-  BarCodeScanner = BarcodeModule.BarCodeScanner;
+  // Temporarily disabled due to compatibility issues with Expo SDK 53
+  // const BarcodeModule = require('expo-barcode-scanner');
+  // BarCodeScanner = BarcodeModule.BarCodeScanner;
+  BarCodeScanner = null;
 } catch (error) {
   console.log('BarCodeScanner not available, using fallback');
   BarCodeScanner = null;
