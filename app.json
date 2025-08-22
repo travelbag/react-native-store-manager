@@ -43,7 +43,8 @@
           "icon": "./assets/icon.png",
           "color": "#ffffff"
         }
-      ]
+      ],
+      "expo-barcode-scanner"
     ],
     "notification": {
       "icon": "./assets/icon.png",
