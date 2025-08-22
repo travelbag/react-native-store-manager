@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,16 +9,7 @@ import {
   Vibration,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-
-// Try to import BarCodeScanner, fall back to manual entry if not available
-let BarCodeScanner;
-try {
-  const BarcodeModule = require('expo-barcode-scanner');
-  BarCodeScanner = BarcodeModule.BarCodeScanner;
-} catch (error) {
-  console.log('BarCodeScanner not available, using fallback');
-  BarCodeScanner = null;
-}
+import { Camera } from 'expo-camera';
 
 const BarcodeScannerScreen = ({ route, navigation }) => {
   const { orderId, itemId, expectedBarcode, itemName, requiredQuantity = 1 } = route.params;
@@ -26,16 +17,11 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
   const [scanned, setScanned] = useState(false);
   const [pickedQuantity, setPickedQuantity] = useState(1);
   const [showQuantitySelector, setShowQuantitySelector] = useState(false);
+  const cameraRef = useRef(null);
 
   useEffect(() => {
-    if (!BarCodeScanner) {
-      // If BarCodeScanner is not available, navigate to fallback
-      navigation.replace('BarcodeScannerFallback', route.params);
-      return;
-    }
-
     (async () => {
-      const { status } = await BarCodeScanner.requestPermissionsAsync();
+      const { status } = await Camera.requestCameraPermissionsAsync();
       setHasPermission(status === 'granted');
     })();
   }, []);
@@ -49,7 +35,7 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
       if (requiredQuantity > 1) {
         setShowQuantitySelector(true);
       } else {
-        confirmScan(1);
+        confirmScan(1, data);
       }
     } else {
       Alert.alert(
@@ -63,7 +49,7 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
     }
   };
 
-  const confirmScan = (quantity) => {
+  const confirmScan = (quantity, scannedData) => {
     Alert.alert(
       'Success!',
       `✅ ${itemName} scanned successfully!\nQuantity picked: ${quantity}${requiredQuantity > 1 ? ` of ${requiredQuantity}` : ''}`,
@@ -74,7 +60,7 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
             navigation.goBack();
             // Pass back the scanned result with quantity
             if (route.params.onScanSuccess) {
-              route.params.onScanSuccess(data, quantity);
+              route.params.onScanSuccess(scannedData || expectedBarcode, quantity);
             }
           },
         },
@@ -110,7 +96,10 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
           <Text style={styles.message}>Camera permission is required to scan barcodes</Text>
           <TouchableOpacity
             style={styles.button}
-            onPress={() => BarCodeScanner?.requestPermissionsAsync()}
+            onPress={async () => {
+              const { status } = await Camera.requestCameraPermissionsAsync();
+              setHasPermission(status === 'granted');
+            }}
           >
             <Text style={styles.buttonText}>Grant Permission</Text>
           </TouchableOpacity>
@@ -144,16 +133,22 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
       </View>
 
       <View style={styles.scannerContainer}>
-        {BarCodeScanner ? (
-          <BarCodeScanner
-            onBarCodeScanned={scanned ? undefined : handleBarCodeScanned}
-            style={styles.scanner}
-          />
-        ) : (
-          <View style={styles.fallbackContainer}>
-            <Text style={styles.fallbackText}>Camera Scanner Not Available</Text>
-          </View>
-        )}
+        <Camera
+          ref={cameraRef}
+          onBarCodeScanned={scanned ? undefined : handleBarCodeScanned}
+          style={styles.scanner}
+          barCodeScannerSettings={{
+            barCodeTypes: [
+              'ean13',
+              'ean8',
+              'upc_a',
+              'upc_e',
+              'code39',
+              'code128',
+              'qr',
+            ],
+          }}
+        />
         <View style={styles.overlay}>
           <View style={styles.scanFrame} />
         </View>
@@ -171,12 +166,10 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
               >
                 <Ionicons name="remove" size={24} color={pickedQuantity <= 1 ? "#666" : "#FFFFFF"} />
               </TouchableOpacity>
-              
               <View style={styles.quantityDisplay}>
                 <Text style={styles.quantityNumber}>{pickedQuantity}</Text>
                 <Text style={styles.quantityLabel}>of {requiredQuantity}</Text>
               </View>
-              
               <TouchableOpacity
                 style={[styles.quantityButton, pickedQuantity >= requiredQuantity && styles.quantityButtonDisabled]}
                 onPress={increaseQuantity}
@@ -185,7 +178,6 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
                 <Ionicons name="add" size={24} color={pickedQuantity >= requiredQuantity ? "#666" : "#FFFFFF"} />
               </TouchableOpacity>
             </View>
-            
             <TouchableOpacity
               style={styles.confirmButton}
               onPress={() => confirmScan(pickedQuantity)}
@@ -194,7 +186,6 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
             </TouchableOpacity>
           </View>
         )}
-        
         {scanned && !showQuantitySelector && (
           <TouchableOpacity
             style={styles.button}
@@ -203,7 +194,6 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
             <Text style={styles.buttonText}>Scan Again</Text>
           </TouchableOpacity>
         )}
-        
         <TouchableOpacity
           style={[styles.button, styles.secondaryButton]}
           onPress={() => navigation.goBack()}
