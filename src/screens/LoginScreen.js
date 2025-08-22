@@ -17,8 +17,8 @@ import { useAuth } from '../context/AuthContext';
 import { API_CONFIG } from '../config/api';
 
 const LoginScreen = ({ navigation }) => {
-  const [username, setUsername] = useState(__DEV__ ? 'admin' : '');
-  const [password, setPassword] = useState(__DEV__ ? 'admin123' : '');
+  const [username, setUsername] = useState(__DEV__ ? 'Store-1' : '');
+  const [password, setPassword] = useState(__DEV__ ? 'Hello@123' : '');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   
