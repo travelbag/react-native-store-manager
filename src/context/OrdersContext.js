@@ -258,7 +258,9 @@ export function OrdersProvider({ children }) {
       
       // Set up notification listeners for real push notifications
       NotificationService.setupNotificationListeners(
+      
         (notification) => {
+          console.log('🔔 Notification received:', notification) ;
           // Handle incoming notification (app is open)
           const data = notification.request.content.data;
           if (data.type === 'grocery_order') {

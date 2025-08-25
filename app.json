@@ -2,7 +2,7 @@
   "expo": {
     "name": "react-native-store-manager",
     "slug": "react-native-store-manager",
-    "version": "1.0.0",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -16,6 +16,7 @@
       "infoPlist": {
         "NSCameraUsageDescription": "This app needs access to the camera to scan product barcodes for order fulfillment.",
         "ITSAppUsesNonExemptEncryption": false
+
       },
       "bundleIdentifier": "com.littlekart1.reactnativestoremanager"
     },
