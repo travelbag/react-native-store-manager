@@ -14,7 +14,7 @@ export const API_CONFIG = {
     LOGIN: '/store-managers/login',
     VERIFY_TOKEN: '/store-managers/verify',
     REGISTER_TOKEN: '/store-managers/{id}/register-token',
-    ORDERS: '/orders',
+    ORDERS: '/api/orders',
     ORDER_DETAILS: '/orders', // /{orderId}
     UPDATE_ORDER_STATUS: '/orders', // /{orderId}/status
   },

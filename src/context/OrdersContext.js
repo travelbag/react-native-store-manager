@@ -263,6 +263,7 @@ export function OrdersProvider({ children }) {
           console.log('🔔 Notification received:', notification) ;
           // Handle incoming notification (app is open)
           const data = notification.request.content.data;
+          console.log('🔍 Notification data:', data) ;
           if (data.type === 'grocery_order') {
             handleNewOrderNotification(data);
           }
@@ -344,8 +345,9 @@ export function OrdersProvider({ children }) {
     try {
       // Fetch full order details from backend
       const orderId = notificationData.orderId;
+      console.log('📦 Handling new order notification for order ID:', orderId);
       const orderDetails = await fetchOrderDetails(orderId);
-      
+      console.log('📦 New order details fetched:', orderDetails);
       if (orderDetails) {
         addOrder(orderDetails);
       }
@@ -360,11 +362,57 @@ export function OrdersProvider({ children }) {
       const response = await fetch(buildApiUrl(API_CONFIG.ENDPOINTS.ORDER_DETAILS, `/${orderId}`), {
         headers: getAuthHeaders(),
       });
-
+      console.log(buildApiUrl(API_CONFIG.ENDPOINTS.ORDER_DETAILS, `/${orderId}`));
+      console.log('📦 Fetching order details for order ID:', orderId, 'Response status:', response.status);
       if (response.ok) {
         const result = await response.json();
-        const orderData = result.data || result; // Handle different response formats
-        console.log('📦 Order details fetched:', orderData);
+        const orderRaw = result.data || result;
+        // Parse items if they are a stringified array
+        let items = [];
+        if (typeof orderRaw.items === 'string') {
+          try {
+            items = JSON.parse(orderRaw.items);
+          } catch (e) {
+            console.error('❌ Error parsing items JSON:', e);
+            items = [];
+          }
+        } else if (Array.isArray(orderRaw.items)) {
+          items = orderRaw.items;
+        }
+
+        // Map backend fields to frontend order format
+        const orderData = {
+          id: orderRaw.orderId,
+          customerName: orderRaw.customerName,
+          items: items.map((item, idx) => ({
+            id: `${orderRaw.orderId}_item_${idx}`,
+            name: item.productName || item.name || '',
+            price: parseFloat(item.price) || 0,
+            quantity: item.quantity || 1,
+            barcode: item.barcode || '',
+            image: item.image || '',
+            category: item.type || '',
+            rack: {},
+            status: ITEM_STATUS.PENDING,
+            weight: item.weight || '',
+            mrp: item.mrp || '',
+          })),
+          total: orderRaw.totalPrice || '0.00',
+          status: orderRaw.orderStatus || ORDER_STATUS.PENDING,
+          timestamp: orderRaw.orderDate || new Date().toISOString(),
+          deliveryAddress: orderRaw.deliveryAddress || '',
+          phoneNumber: orderRaw.phoneNumber || '',
+          estimatedTime: 30, // Placeholder
+          orderType: 'grocery',
+          deliveryType: 'home_delivery',
+          specialInstructions: '',
+          storeId: orderRaw.storeId || '',
+          deliveryLatitude: orderRaw.deliveryLatitude || '',
+          deliveryLongitude: orderRaw.deliveryLongitude || '',
+          paymentType: orderRaw.paymentType || '',
+          driverId: orderRaw.driverId || null,
+        };
+        console.log('📦 Order details mapped:', orderData);
         return orderData;
       } else {
         console.error('❌ Failed to fetch order details:', response.status);
