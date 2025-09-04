@@ -1,7 +1,7 @@
 // API Configuration
 export const API_CONFIG = {
   // Replace with your actual backend URL
-  BASE_URL: 'https://ubgukf7hdu.us-east-1.awsapprunner.com/api',
+  BASE_URL: 'http://10.0.2.2:8080/api',
     //BASE_URL: 'http://localhost:8080/api',
 
   

@@ -15,7 +15,6 @@ import { useOrders, ITEM_STATUS, ORDER_STATUS } from '../context/OrdersContext';
 const OrderPickingScreen = ({ route, navigation }) => {
   const { orderId } = route.params;
   const { orders, updateItemStatus, scanBarcode, markItemUnavailable, updateOrderStatus } = useOrders();
-  const [selectedItem, setSelectedItem] = useState(null);
 
   const order = orders.find(o => o.id === orderId);
 

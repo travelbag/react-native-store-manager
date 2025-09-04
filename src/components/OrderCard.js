@@ -22,6 +22,26 @@ const OrderCard = ({ order }) => {
     completeOrder,
   } = useOrders();
 
+  // Map backend fields to frontend expected fields
+  const orderId = order?.id || order?.orderId || '';
+  console.log('Rendering OrderCard for orderId:', order);
+  // Parse items if stringified
+  let items = Array.isArray(order?.items)
+    ? order.items
+    : typeof order?.items === 'string'
+      ? (() => { try { return JSON.parse(order.items); } catch { return []; } })()
+      : [];
+
+  // Fallbacks for other fields
+  const customerName = order?.customerName || '';
+  const timestamp = order?.timestamp || order?.orderDate || '';
+  const status = order?.status || order?.orderStatus || 'N/A';
+  const total = order?.total || order?.totalPrice || 0;
+  const deliveryAddress = order?.deliveryAddress || '';
+  const phoneNumber = order?.phoneNumber || '';
+  const deliveryType = order?.deliveryType || '';
+  const specialInstructions = order?.specialInstructions || '';
+
   const getStatusColor = (status) => {
     switch (status) {
       case ORDER_STATUS.PENDING:
@@ -65,10 +85,10 @@ const OrderCard = ({ order }) => {
   const handleAccept = () => {
     Alert.alert(
       'Accept Order',
-      `Accept order #${order.id} from ${order.customerName}?`,
+      `Accept order #${orderId} from ${customerName}?`,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Accept', onPress: () => acceptOrder(order.id) },
+        { text: 'Accept', onPress: () => acceptOrder(orderId) },
       ]
     );
   };
@@ -76,38 +96,39 @@ const OrderCard = ({ order }) => {
   const handleReject = () => {
     Alert.alert(
       'Reject Order',
-      `Reject order #${order.id} from ${order.customerName}?`,
+      `Reject order #${orderId} from ${customerName}?`,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Reject', style: 'destructive', onPress: () => rejectOrder(order.id) },
+        { text: 'Reject', style: 'destructive', onPress: () => rejectOrder(orderId) },
       ]
     );
   };
 
   const handleStartPicking = () => {
-    startPickingOrder(order.id);
-    navigation.navigate('OrderPicking', { orderId: order.id });
+    startPickingOrder(orderId);
+    navigation.navigate('OrderPicking', { orderId });
   };
 
   const handleStartPreparing = () => {
-    startPreparingOrder(order.id);
+    startPreparingOrder(orderId);
   };
 
   const handleMarkReady = () => {
-    markOrderReady(order.id);
+    markOrderReady(orderId);
   };
 
   const handleComplete = () => {
-    completeOrder(order.id);
+    completeOrder(orderId);
   };
 
   const formatTime = (timestamp) => {
+    if (!timestamp) return '';
     const date = new Date(timestamp);
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
   const renderActionButtons = () => {
-    switch (order.status) {
+    switch (status) {
       case ORDER_STATUS.PENDING:
         return (
           <View style={styles.actionButtons}>
@@ -127,12 +148,12 @@ const OrderCard = ({ order }) => {
           </TouchableOpacity>
         );
       case ORDER_STATUS.PICKING:
-        const pickedItems = order.items?.filter(item => item.status === ITEM_STATUS.SCANNED).length || 0;
-        const totalItems = order.items?.length || 0;
+        const pickedItems = items?.filter(item => item.status === ITEM_STATUS.SCANNED).length || 0;
+        const totalItems = items?.length || 0;
         return (
           <TouchableOpacity 
             style={styles.primaryButton} 
-            onPress={() => navigation.navigate('OrderPicking', { orderId: order.id })}
+            onPress={() => navigation.navigate('OrderPicking', { orderId })}
           >
             <Ionicons name="location-outline" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
             <Text style={styles.primaryButtonText}>
@@ -163,54 +184,57 @@ const OrderCard = ({ order }) => {
     <View style={styles.container}>
       <View style={styles.header}>
         <View>
-          <Text style={styles.orderId}>Order #{order.id}</Text>
-          <Text style={styles.customerName}>{order.customerName}</Text>
-          <Text style={styles.time}>{formatTime(order.timestamp)}</Text>
+          <Text style={styles.orderId}>Order #{orderId}</Text>
+          <Text style={styles.customerName}>{customerName}</Text>
+          <Text style={styles.time}>{formatTime(timestamp)}</Text>
         </View>
-        <View style={[styles.statusBadge, { backgroundColor: getStatusColor(order.status) }]}>
-          <Text style={styles.statusText}>{getStatusText(order.status)}</Text>
+        <View style={[styles.statusBadge, { backgroundColor: getStatusColor(status) }]}>
+          <Text style={styles.statusText}>{getStatusText(status)}</Text>
         </View>
       </View>
 
       <View style={styles.orderDetails}>
-        <Text style={styles.sectionTitle}>Items ({order.items.length}):</Text>
-        {order.items.map((item, index) => (
-          <View key={index} style={styles.itemRow}>
-            {item.image && (
-              <Image source={{ uri: item.image }} style={styles.itemImage} />
-            )}
-            <View style={styles.itemDetails}>
-              <Text style={styles.itemName}>
-                {item.quantity}x {item.name}
-              </Text>
-              {item.category && (
-                <Text style={styles.itemCategory}>{item.category}</Text>
+        <Text style={styles.sectionTitle}>Items ({items.length}):</Text>
+        {Array.isArray(items) && items.length > 0 ? (
+          items.map((item, index) => (
+            <View key={index} style={styles.itemRow}>
+              {item.image && (
+                <Image source={{ uri: item.image }} style={styles.itemImage} />
               )}
-              {item.rack && (
-                <Text style={styles.itemLocation}>📍 {item.rack.location}</Text>
-              )}
+              <View style={styles.itemDetails}>
+                <Text style={styles.itemName}>
+                  {item.quantity}x {item.name}
+                </Text>
+                {item.category && (
+                  <Text style={styles.itemCategory}>{item.category}</Text>
+                )}
+                {item.rack && (
+                  <Text style={styles.itemLocation}>📍 {item.rack.location}</Text>
+                )}
+              </View>
+              <Text style={styles.itemPrice}>${((item.price ?? 0) * (item.quantity ?? 0)).toFixed(2)}</Text>
             </View>
-            <Text style={styles.itemPrice}>${(item.price * item.quantity).toFixed(2)}</Text>
-          </View>
-        ))}
-        
+          ))
+        ) : (
+          <Text style={{ color: '#888', fontStyle: 'italic', marginBottom: 8 }}>No items found for this order.</Text>
+        )}
         <View style={styles.totalContainer}>
-          <Text style={styles.totalText}>Total: ${order.total}</Text>
+          <Text style={styles.totalText}>Total: ${total}</Text>
         </View>
 
         <View style={styles.customerInfo}>
           <Text style={styles.infoLabel}>Delivery Address:</Text>
-          <Text style={styles.infoText}>{order.deliveryAddress}</Text>
+          <Text style={styles.infoText}>{deliveryAddress}</Text>
           <Text style={styles.infoLabel}>Phone:</Text>
-          <Text style={styles.infoText}>{order.phoneNumber}</Text>
+          <Text style={styles.infoText}>{phoneNumber}</Text>
           <Text style={styles.infoLabel}>Delivery Type:</Text>
           <Text style={styles.infoText}>
-            {order.deliveryType === 'home_delivery' ? '🚚 Home Delivery' : '🏪 Store Pickup'}
+            {deliveryType === 'home_delivery' ? '🚚 Home Delivery' : '🏪 Store Pickup'}
           </Text>
-          {order.specialInstructions && (
+          {specialInstructions && (
             <>
               <Text style={styles.infoLabel}>Special Instructions:</Text>
-              <Text style={styles.infoText}>{order.specialInstructions}</Text>
+              <Text style={styles.infoText}>{specialInstructions}</Text>
             </>
           )}
         </View>

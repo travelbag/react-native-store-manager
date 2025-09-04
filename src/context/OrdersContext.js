@@ -225,10 +225,33 @@ export function OrdersProvider({ children }) {
     console.log('🛒 OrdersContext initialized', isAuthenticated, manager);
     if (isAuthenticated && manager) {
       console.log('📦 Initializing notifications for orders');
-      initializeNotifications();
+      
+       // Fetch orders from DB after login
+    fetchOrdersFromDB().then(orders => {
+      dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
+    });initializeNotifications();
     }
   }, [isAuthenticated, manager]);
-
+// Fetch orders from backend DB by storeId and optional status
+const fetchOrdersFromDB = async (status = null) => {
+  if (!manager || !manager.storeId) {
+    console.error('❌ No storeId found for manager');
+    return [];
+  }
+  let url = buildApiUrl(`/orders/by-store/${manager.storeId}`);
+  console.log('Fetching orders from DB with URL:', url);
+  if (status) url += `?status=${status}`;
+  try {
+    const response = await fetch(url, { headers: getAuthHeaders() });
+    const data = await response.json();
+    // Map DB fields to your frontend order format if needed
+    console.log('📦 Orders fetched from DB:', data.orders);
+    return data.orders || [];
+  } catch (error) {
+    console.error('❌ Error fetching orders from DB:', error);
+    return [];
+  }
+};
   const initializeNotifications = async () => {
     try {
       console.log('🚀 Starting notification initialization...');

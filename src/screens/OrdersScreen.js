@@ -20,19 +20,21 @@ const OrdersScreen = () => {
   const [selectedFilter, setSelectedFilter] = useState('all');
   const [refreshing, setRefreshing] = useState(false);
 
+  const safeOrders = Array.isArray(orders) ? orders : [];
   const filters = [
-    { key: 'all', label: 'All Orders', count: orders.length },
-    { key: ORDER_STATUS.PENDING, label: 'Pending', count: orders.filter(o => o.status === ORDER_STATUS.PENDING).length },
-    { key: ORDER_STATUS.ACCEPTED, label: 'Accepted', count: orders.filter(o => o.status === ORDER_STATUS.ACCEPTED).length },
-    { key: ORDER_STATUS.PICKING, label: 'Picking', count: orders.filter(o => o.status === ORDER_STATUS.PICKING).length },
-    { key: ORDER_STATUS.PREPARING, label: 'Preparing', count: orders.filter(o => o.status === ORDER_STATUS.PREPARING).length },
-    { key: ORDER_STATUS.READY, label: 'Ready', count: orders.filter(o => o.status === ORDER_STATUS.READY).length },
+    { key: 'all', label: 'All Orders', count: safeOrders.length },
+    { key: ORDER_STATUS.PENDING, label: 'Pending', count: safeOrders.filter(o => o.status === ORDER_STATUS.PENDING).length },
+    { key: ORDER_STATUS.ACCEPTED, label: 'Accepted', count: safeOrders.filter(o => o.status === ORDER_STATUS.ACCEPTED).length },
+    { key: ORDER_STATUS.PICKING, label: 'Picking', count: safeOrders.filter(o => o.status === ORDER_STATUS.PICKING).length },
+    { key: ORDER_STATUS.PREPARING, label: 'Preparing', count: safeOrders.filter(o => o.status === ORDER_STATUS.PREPARING).length },
+    { key: ORDER_STATUS.READY, label: 'Ready', count: safeOrders.filter(o => o.status === ORDER_STATUS.READY).length },
   ];
 
   const filteredOrders = selectedFilter === 'all' 
-    ? orders.filter(order => order.status !== ORDER_STATUS.COMPLETED && order.status !== ORDER_STATUS.REJECTED)
-    : orders.filter(order => order.status === selectedFilter);
+    ? safeOrders.filter(order => order.status !== ORDER_STATUS.COMPLETED && order.status !== ORDER_STATUS.REJECTED)
+    : safeOrders.filter(order => order.status === selectedFilter);
 
+    console.log('Filtered Orders:', filteredOrders);
   const onRefresh = () => {
     setRefreshing(true);
     // Simulate refresh
@@ -42,7 +44,19 @@ const OrdersScreen = () => {
   };
 
   const renderOrderItem = ({ item }) => (
-    <OrderCard order={item} />
+    <OrderCard order={{
+      ...item,
+      id: item?.id ?? item?.orderId ?? '',
+      status: item?.status ?? item?.orderStatus ?? 'N/A',
+      totalPrice: item?.totalPrice ?? item?.total ?? 0,
+      customerName: item?.customerName ?? '',
+      orderDate: item?.orderDate ?? item?.timestamp ?? '',
+      items: Array.isArray(item?.items)
+        ? item.items
+        : typeof item?.items === 'string'
+          ? (() => { try { return JSON.parse(item.items); } catch { return []; } })()
+          : [],
+    }} />
   );
 
   const renderFilterButton = (filter) => (
@@ -62,7 +76,7 @@ const OrdersScreen = () => {
       >
         {filter.label}
       </Text>
-      {filter.count > 0 && (
+      {typeof filter.count === 'number' && filter.count > 0 && (
         <View style={styles.countBadge}>
           <Text style={styles.countText}>{filter.count}</Text>
         </View>
@@ -160,7 +174,11 @@ const OrdersScreen = () => {
       <FlatList
         data={filteredOrders}
         renderItem={renderOrderItem}
-        keyExtractor={(item) => item.id.toString()}
+        keyExtractor={(item, index) => {
+          // Use id if available and unique, else fallback to index
+          const key = item?.id ? item.id.toString() : `order-${index}`;
+          return key;
+        }}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
