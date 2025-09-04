@@ -233,7 +233,7 @@ export function OrdersProvider({ children }) {
     try {
       console.log('🚀 Starting notification initialization...');
       // If Android and not using Firebase, use local notifications
-      if (false) {
+      if (Platform.OS === 'android' && !API_CONFIG.USE_FIREBASE) {
         console.log('🔔 Using Expo local notifications for Android (no Firebase)');
         await Notifications.requestPermissionsAsync();
         Notifications.setNotificationHandler({
