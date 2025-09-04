@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "831067718856",
+    "project_id": "littlekart-7c35c",
+    "storage_bucket": "littlekart-7c35c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:831067718856:android:788ca6e02d53bda40751fd",
+        "android_client_info": {
+          "package_name": "com.littlekart.littlekart"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBExdhdZi4lnsHjpox9qsQ-Htg7g8adStQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:831067718856:android:14e22953932582770751fd",
+        "android_client_info": {
+          "package_name": "com.littlekart1.reactnativestoremanager"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBExdhdZi4lnsHjpox9qsQ-Htg7g8adStQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
