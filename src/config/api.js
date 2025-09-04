@@ -8,7 +8,7 @@ export const API_CONFIG = {
   // Store Manager Configuration - will be set from logged in user
   STORE_MANAGER_ID: null, // Set after login
   STORE_ID: null, // Set after login
-  
+  USE_FIREBASE: true,
   // API Endpoints
   ENDPOINTS: {
     LOGIN: '/store-managers/login',

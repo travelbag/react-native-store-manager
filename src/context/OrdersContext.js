@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useReducer, useEffect } from 'react';
+import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import NotificationService from '../services/NotificationService';
 import { API_CONFIG, buildApiUrl } from '../config/api';
@@ -221,9 +222,9 @@ export function OrdersProvider({ children }) {
   const { isAuthenticated, manager, getAuthHeaders } = useAuth();
 
   useEffect(() => {
-    console.log('🛒 OrdersContext initialized', isAuthenticated,manager ) ;
+    console.log('🛒 OrdersContext initialized', isAuthenticated, manager);
     if (isAuthenticated && manager) {
-        console.log('📦 Initializing notifications for orders') ;
+      console.log('📦 Initializing notifications for orders');
       initializeNotifications();
     }
   }, [isAuthenticated, manager]);
@@ -231,57 +232,59 @@ export function OrdersProvider({ children }) {
   const initializeNotifications = async () => {
     try {
       console.log('🚀 Starting notification initialization...');
-      
-      // Get push token and register with backend
-      const token = await NotificationService.registerForPushNotificationsAsync();
-      console.log('📲 Push token obtained:', token);
-      
-      if (token) {
-        console.log('✅ Valid push token received, registering with backend...');
-        // Save token to backend for this store manager
-        await registerStoreManagerToken(token);
+      // If Android and not using Firebase, use local notifications
+      if (Platform.OS === 'android' && !API_CONFIG.USE_FIREBASE) {
+        console.log('🔔 Using Expo local notifications for Android (no Firebase)');
+        await Notifications.requestPermissionsAsync();
+        Notifications.setNotificationHandler({
+          handleNotification: async () => ({
+            shouldShowAlert: true,
+            shouldPlaySound: false,
+            shouldSetBadge: false,
+          }),
+        });
       } else {
-        console.warn('⚠️ No push token received.');
-        
-        // For development, try to create a mock token
-        if (__DEV__) {
-          console.log('🧪 Development mode: Creating mock token for testing...');
-          const mockToken = NotificationService.createMockToken();
-          if (mockToken) {
-            console.log('🎭 Using mock token for development:', mockToken);
-            await registerStoreManagerToken(mockToken);
-          }
+        // Get push token and register with backend
+        const token = await NotificationService.registerForPushNotificationsAsync();
+        console.log('📲 Push token obtained:', token);
+        if (token) {
+          console.log('✅ Valid push token received, registering with backend...');
+          await registerStoreManagerToken(token);
         } else {
-          console.log('💡 Push notifications require physical device in production.');
+          console.warn('⚠️ No push token received.');
+          if (__DEV__) {
+            console.log('🧪 Development mode: Creating mock token for testing...');
+            const mockToken = NotificationService.createMockToken();
+            if (mockToken) {
+              console.log('🎭 Using mock token for development:', mockToken);
+              await registerStoreManagerToken(mockToken);
+            }
+          } else {
+            console.log('💡 Push notifications require physical device in production.');
+          }
         }
+        // Set up notification listeners for real push notifications
+        NotificationService.setupNotificationListeners(
+          (notification) => {
+            console.log('🔔 Notification received:', notification);
+            const data = notification.request.content.data;
+            console.log('🔍 Notification data:', data);
+            if (data.type === 'grocery_order') {
+              handleNewOrderNotification(data);
+            }
+          },
+          (response) => {
+            const data = response.notification.request.content.data;
+            if (data.type === 'grocery_order') {
+              handleNewOrderNotification(data);
+            }
+          }
+        );
       }
-      
-      // Set up notification listeners for real push notifications
-      NotificationService.setupNotificationListeners(
-      
-        (notification) => {
-          console.log('🔔 Notification received:', notification) ;
-          // Handle incoming notification (app is open)
-          const data = notification.request.content.data;
-          console.log('🔍 Notification data:', data) ;
-          if (data.type === 'grocery_order') {
-            handleNewOrderNotification(data);
-          }
-        },
-        (response) => {
-          // Handle notification tap (app was closed/background)
-          const data = response.notification.request.content.data;
-          if (data.type === 'grocery_order') {
-            handleNewOrderNotification(data);
-          }
-        }
-      );
-
       // DEMO MODE - Remove in production
       if (API_CONFIG.DEMO_MODE) {
-       // startDemoMode();
+        // startDemoMode();
       }
-
     } catch (error) {
       console.error('Failed to initialize notifications:', error);
     }
@@ -350,6 +353,17 @@ export function OrdersProvider({ children }) {
       console.log('📦 New order details fetched:', orderDetails);
       if (orderDetails) {
         addOrder(orderDetails);
+        // If Android and not using Firebase, show local notification
+        if (Platform.OS === 'android' && !API_CONFIG.USE_FIREBASE) {
+          await Notifications.scheduleNotificationAsync({
+            content: {
+              title: 'New Grocery Order',
+              body: `Order #${orderId} received!`,
+              data: notificationData,
+            },
+            trigger: null,
+          });
+        }
       }
     } catch (error) {
       console.error('Error handling new order notification:', error);

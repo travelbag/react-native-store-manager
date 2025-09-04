@@ -162,6 +162,8 @@ export function AuthProvider({ children }) {
 
     //     return { success: true, manager: mockManager };
     //   }
+    console.log(buildApiUrl(API_CONFIG.ENDPOINTS.LOGIN));
+    console.log(JSON.stringify({ username, password }))
 
       // Real API login
       const response = await fetch(buildApiUrl(API_CONFIG.ENDPOINTS.LOGIN), {
