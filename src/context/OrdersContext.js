@@ -469,7 +469,15 @@ const fetchOrdersFromDB = async (status = null) => {
     dispatch({ type: ACTIONS.UPDATE_ORDER_STATUS, payload: { orderId, status } });
   };
 
-  const acceptOrder = (orderId) => {
+  const acceptOrder = async (orderId) => {
+    console.log('✅ Accepting order ID:', orderId);
+    // Update backend
+    await fetch(buildApiUrl(`/orders/${orderId}/status`), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ status: ORDER_STATUS.ACCEPTED }),
+    });
+    // Update frontend state
     updateOrderStatus(orderId, ORDER_STATUS.ACCEPTED);
   };
 

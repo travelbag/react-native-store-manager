@@ -24,7 +24,7 @@ const OrderCard = ({ order }) => {
 
   // Map backend fields to frontend expected fields
   const orderId = order?.id || order?.orderId || '';
-  console.log('Rendering OrderCard for orderId:', order);
+  //console.log('Rendering OrderCard for orderId:', order);
   // Parse items if stringified
   let items = Array.isArray(order?.items)
     ? order.items

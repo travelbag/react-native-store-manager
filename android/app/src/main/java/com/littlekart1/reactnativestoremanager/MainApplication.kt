@@ -11,7 +11,6 @@ import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.load
 import com.facebook.react.defaults.DefaultReactNativeHost
 import com.facebook.react.soloader.OpenSourceMergedSoMapping
 import com.facebook.soloader.SoLoader
-import com.google.firebase.FirebaseApp  // 👈 add this import
 
 import expo.modules.ApplicationLifecycleDispatcher
 import expo.modules.ReactNativeHostWrapper
@@ -46,9 +45,6 @@ class MainApplication : Application(), ReactApplication {
     if (BuildConfig.IS_NEW_ARCHITECTURE_ENABLED) {
       load()
     }
-
-    // 👇 Initialize Firebase here
-    FirebaseApp.initializeApp(this)
 
     ApplicationLifecycleDispatcher.onApplicationCreate(this)
   }

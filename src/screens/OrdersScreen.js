@@ -21,20 +21,26 @@ const OrdersScreen = () => {
   const [refreshing, setRefreshing] = useState(false);
 
   const safeOrders = Array.isArray(orders) ? orders : [];
+  // Normalize status for filtering
+  const normalizeStatus = (status) => {
+    if (!status) return '';
+    return String(status).toLowerCase();
+  };
+
   const filters = [
     { key: 'all', label: 'All Orders', count: safeOrders.length },
-    { key: ORDER_STATUS.PENDING, label: 'Pending', count: safeOrders.filter(o => o.status === ORDER_STATUS.PENDING).length },
-    { key: ORDER_STATUS.ACCEPTED, label: 'Accepted', count: safeOrders.filter(o => o.status === ORDER_STATUS.ACCEPTED).length },
-    { key: ORDER_STATUS.PICKING, label: 'Picking', count: safeOrders.filter(o => o.status === ORDER_STATUS.PICKING).length },
-    { key: ORDER_STATUS.PREPARING, label: 'Preparing', count: safeOrders.filter(o => o.status === ORDER_STATUS.PREPARING).length },
-    { key: ORDER_STATUS.READY, label: 'Ready', count: safeOrders.filter(o => o.status === ORDER_STATUS.READY).length },
+    { key: ORDER_STATUS.PENDING, label: 'Pending', count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === normalizeStatus(ORDER_STATUS.PENDING)).length },
+    { key: ORDER_STATUS.ACCEPTED, label: 'Accepted', count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === normalizeStatus(ORDER_STATUS.ACCEPTED)).length },
+    { key: ORDER_STATUS.PICKING, label: 'Picking', count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === normalizeStatus(ORDER_STATUS.PICKING)).length },
+    { key: ORDER_STATUS.PREPARING, label: 'Preparing', count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === normalizeStatus(ORDER_STATUS.PREPARING)).length },
+    { key: ORDER_STATUS.READY, label: 'Ready', count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === normalizeStatus(ORDER_STATUS.READY)).length },
   ];
 
   const filteredOrders = selectedFilter === 'all' 
-    ? safeOrders.filter(order => order.status !== ORDER_STATUS.COMPLETED && order.status !== ORDER_STATUS.REJECTED)
-    : safeOrders.filter(order => order.status === selectedFilter);
+    ? safeOrders.filter(order => normalizeStatus(order.status ?? order.orderStatus) !== normalizeStatus(ORDER_STATUS.COMPLETED) && normalizeStatus(order.status ?? order.orderStatus) !== normalizeStatus(ORDER_STATUS.REJECTED))
+    : safeOrders.filter(order => normalizeStatus(order.status ?? order.orderStatus) === normalizeStatus(selectedFilter));
 
-    console.log('Filtered Orders:', filteredOrders);
+    //console.log('Filtered Orders:', filteredOrders);
   const onRefresh = () => {
     setRefreshing(true);
     // Simulate refresh
