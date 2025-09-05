@@ -105,6 +105,8 @@ const OrderCard = ({ order }) => {
   };
 
   const handleStartPicking = () => {
+    console.log('🛒 Starting picking for orderId:', orderId);
+    console.log('🛒 Original order object:', { id: order?.id, orderId: order?.orderId });
     startPickingOrder(orderId);
     navigation.navigate('OrderPicking', { orderId });
   };
@@ -153,7 +155,11 @@ const OrderCard = ({ order }) => {
         return (
           <TouchableOpacity 
             style={styles.primaryButton} 
-            onPress={() => navigation.navigate('OrderPicking', { orderId })}
+            onPress={() => {
+              console.log('🔄 Continue picking for orderId:', orderId);
+              console.log('🔄 Original order object:', { id: order?.id, orderId: order?.orderId });
+              navigation.navigate('OrderPicking', { orderId });
+            }}
           >
             <Ionicons name="location-outline" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
             <Text style={styles.primaryButtonText}>

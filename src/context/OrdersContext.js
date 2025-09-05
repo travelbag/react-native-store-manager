@@ -220,6 +220,7 @@ function generateSampleGroceryOrder() {
 export function OrdersProvider({ children }) {
   const [state, dispatch] = useReducer(ordersReducer, initialState);
   const { isAuthenticated, manager, getAuthHeaders } = useAuth();
+  const [demoInterval, setDemoInterval] = React.useState(null);
 
   useEffect(() => {
     console.log('🛒 OrdersContext initialized', isAuthenticated, manager);
@@ -228,7 +229,26 @@ export function OrdersProvider({ children }) {
       
        // Fetch orders from DB after login
     fetchOrdersFromDB().then(orders => {
-      dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
+      // If no orders from backend, use sample orders for development
+      if (!orders || orders.length === 0) {
+        console.log('📦 No orders from backend, using sample orders');
+        const sampleOrders = [
+          generateSampleGroceryOrder(),
+          generateSampleGroceryOrder(),
+          generateSampleGroceryOrder(),
+        ];
+        dispatch({ type: ACTIONS.SET_ORDERS, payload: sampleOrders });
+      } else {
+        dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
+      }
+    }).catch(error => {
+      console.error('❌ Error fetching orders, using sample orders:', error);
+      const sampleOrders = [
+        generateSampleGroceryOrder(),
+        generateSampleGroceryOrder(),
+        generateSampleGroceryOrder(),
+      ];
+      dispatch({ type: ACTIONS.SET_ORDERS, payload: sampleOrders });
     });initializeNotifications();
     }
   }, [isAuthenticated, manager]);
@@ -246,7 +266,56 @@ const fetchOrdersFromDB = async (status = null) => {
     const data = await response.json();
     // Map DB fields to your frontend order format if needed
     console.log('📦 Orders fetched from DB:', data.orders);
-    return data.orders || [];
+    
+    // Transform backend orders to frontend format
+    const transformedOrders = (data.orders || []).map(orderRaw => {
+      // Parse items if they are a stringified array
+      let items = [];
+      if (typeof orderRaw.items === 'string') {
+        try {
+          items = JSON.parse(orderRaw.items);
+        } catch (e) {
+          console.error('❌ Error parsing items JSON:', e);
+          items = [];
+        }
+      } else if (Array.isArray(orderRaw.items)) {
+        items = orderRaw.items;
+      }
+
+      return {
+        id: orderRaw.orderId,
+        orderId: orderRaw.orderId,
+        customerName: orderRaw.customerName,
+        items: items.map((item, idx) => ({
+          id: `${orderRaw.orderId}_item_${idx}`,
+          name: item.productName || item.name || '',
+          price: parseFloat(item.price) || 0,
+          quantity: item.quantity || 1,
+          barcode: item.barcode || '',
+          image: item.image || '',
+          category: item.type || '',
+          rack: {
+            location: 'Not specified',
+            aisle: 'Not specified',
+            description: 'No description available'
+          },
+          status: ITEM_STATUS.PENDING,
+          weight: item.weight || '',
+          mrp: item.mrp || '',
+        })),
+        total: orderRaw.totalPrice || '0.00',
+        status: orderRaw.orderStatus || ORDER_STATUS.PENDING,
+        timestamp: orderRaw.orderDate || new Date().toISOString(),
+        deliveryAddress: orderRaw.deliveryAddress || '',
+        phoneNumber: orderRaw.phoneNumber || '',
+        estimatedTime: 30,
+        storeId: orderRaw.storeId || '',
+        paymentType: orderRaw.paymentType || 'Cash',
+        driverId: orderRaw.driverId || null,
+      };
+    });
+    
+    return transformedOrders;
   } catch (error) {
     console.error('❌ Error fetching orders from DB:', error);
     return [];
@@ -304,10 +373,7 @@ const fetchOrdersFromDB = async (status = null) => {
           }
         );
       }
-      // DEMO MODE - Remove in production
-      if (API_CONFIG.DEMO_MODE) {
-        // startDemoMode();
-      }
+    
     } catch (error) {
       console.error('Failed to initialize notifications:', error);
     }
@@ -471,21 +537,80 @@ const fetchOrdersFromDB = async (status = null) => {
 
   const acceptOrder = async (orderId) => {
     console.log('✅ Accepting order ID:', orderId);
-    // Update backend
-    await fetch(buildApiUrl(`/orders/${orderId}/status`), {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ status: ORDER_STATUS.ACCEPTED }),
-    });
-    // Update frontend state
-    updateOrderStatus(orderId, ORDER_STATUS.ACCEPTED);
+    try {
+      console.log('🔄 Sending accept order request to backend...',buildApiUrl(`/orders/${orderId}/status`));
+      // Update backend
+      const response = await fetch(buildApiUrl(`/orders/${orderId}/status`), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ status: ORDER_STATUS.ACCEPTED }),
+      });
+      
+      console.log('🔄 Accept order API response status:', response.status);
+      
+      if (response.ok) {
+        console.log('✅ Order accepted successfully in backend');
+        // Update frontend state
+        updateOrderStatus(orderId, ORDER_STATUS.ACCEPTED);
+      } else {
+        console.error('❌ Failed to accept order in backend:', response.status);
+        const errorText = await response.text();
+        console.error('❌ Error details:', errorText);
+        // Still update frontend for now, but log the error
+        updateOrderStatus(orderId, ORDER_STATUS.ACCEPTED);
+      }
+    } catch (error) {
+      console.error('❌ Error accepting order:', error);
+      // Still update frontend for now, but log the error
+      updateOrderStatus(orderId, ORDER_STATUS.ACCEPTED);
+    }
   };
 
-  const rejectOrder = (orderId) => {
+  const rejectOrder = async (orderId) => {
+    console.log('❌ Rejecting order ID:', orderId);
+    try {
+      // Update backend
+      const response = await fetch(buildApiUrl(`/orders/${orderId}/status`), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ status: ORDER_STATUS.REJECTED }),
+      });
+      
+      console.log('🔄 Reject order API response status:', response.status);
+      
+      if (response.ok) {
+        console.log('✅ Order rejected successfully in backend');
+      } else {
+        console.error('❌ Failed to reject order in backend:', response.status);
+      }
+    } catch (error) {
+      console.error('❌ Error rejecting order:', error);
+    }
+    // Update frontend state
     updateOrderStatus(orderId, ORDER_STATUS.REJECTED);
   };
 
-  const startPickingOrder = (orderId) => {
+  const startPickingOrder = async (orderId) => {
+    console.log('🛒 Starting to pick order ID:', orderId);
+    try {
+      // Update backend
+      const response = await fetch(buildApiUrl(`/orders/${orderId}/status`), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ status: ORDER_STATUS.PICKING }),
+      });
+      
+      console.log('🔄 Start picking API response status:', response.status);
+      
+      if (response.ok) {
+        console.log('✅ Order picking started successfully in backend');
+      } else {
+        console.error('❌ Failed to start picking in backend:', response.status);
+      }
+    } catch (error) {
+      console.error('❌ Error starting picking:', error);
+    }
+    // Update frontend state
     updateOrderStatus(orderId, ORDER_STATUS.PICKING);
   };
 
@@ -560,15 +685,43 @@ const fetchOrdersFromDB = async (status = null) => {
     },
     createMockToken: () => {
       return NotificationService.createMockToken();
+    },
+    // Manual notification trigger for testing
+    triggerTestNotification: () => {
+      console.log('🧪 Triggering test notification...');
+      const newOrder = generateSampleGroceryOrder();
+      addOrder(newOrder);
+      NotificationService.simulateGroceryOrderNotification(newOrder);
+      return newOrder;
+    },
+    // Control demo mode
+    stopDemoMode: () => {
+      if (demoInterval) {
+        console.log('🛑 Stopping demo mode');
+        clearInterval(demoInterval);
+        setDemoInterval(null);
+      }
+    },
+    startDemoMode: () => {
+      if (!demoInterval && API_CONFIG.DEMO_MODE) {
+        console.log('🧪 Starting demo mode manually...');
+        const interval = startDemoMode();
+        setDemoInterval(interval);
+      }
     }
   };
 
   // Cleanup function
   useEffect(() => {
     return () => {
+      console.log('🧹 Cleaning up OrdersContext...');
       NotificationService.removeNotificationListeners();
+      if (demoInterval) {
+        console.log('🛑 Clearing demo interval');
+        clearInterval(demoInterval);
+      }
     };
-  }, []);
+  }, [demoInterval]);
 
   return (
     <OrdersContext.Provider value={value}>

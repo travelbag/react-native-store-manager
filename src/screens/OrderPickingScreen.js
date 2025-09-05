@@ -16,15 +16,45 @@ const OrderPickingScreen = ({ route, navigation }) => {
   const { orderId } = route.params;
   const { orders, updateItemStatus, scanBarcode, markItemUnavailable, updateOrderStatus } = useOrders();
 
-  const order = orders.find(o => o.id === orderId);
+  console.log('🔍 OrderPickingScreen - Looking for orderId:', orderId);
+  console.log('📦 Available orders:', orders.map(o => ({ id: o.id, orderId: o.orderId })));
+
+  // Try to find order by both id and orderId fields
+  const order = orders.find(o => o.id == orderId || o.orderId == orderId);
+
+  console.log('📦 Found order:', order ? 'Yes' : 'No');
 
   if (!order) {
     return (
       <SafeAreaView style={styles.container}>
-        <Text style={styles.errorText}>Order not found</Text>
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>Order not found</Text>
+          <Text style={styles.errorDetails}>
+            Looking for order ID: {orderId}
+          </Text>
+          <Text style={styles.errorDetails}>
+            Available orders: {orders.length}
+          </Text>
+          <TouchableOpacity 
+            style={styles.goBackButton}
+            onPress={() => navigation.goBack()}
+          >
+            <Text style={styles.goBackButtonText}>Go Back</Text>
+          </TouchableOpacity>
+        </View>
       </SafeAreaView>
     );
   }
+
+  // Ensure items is always an array
+  const items = Array.isArray(order.items) 
+    ? order.items 
+    : typeof order.items === 'string' 
+      ? (() => { try { return JSON.parse(order.items); } catch { return []; } })()
+      : [];
+
+  console.log('🔍 Order items:', items);
+  console.log('🔍 First item structure:', items[0]);
 
   const getItemStatusColor = (status) => {
     switch (status) {
@@ -58,9 +88,10 @@ const OrderPickingScreen = ({ route, navigation }) => {
 
   const handleLocateItem = (item) => {
     updateItemStatus(orderId, item.id, ITEM_STATUS.LOCATED);
+    const rack = item.rack || {};
     Alert.alert(
       'Navigate to Item',
-      `📍 ${item.name}\n\n🏪 Location: ${item.rack.location}\n📍 Aisle: ${item.rack.aisle}\n📝 Description: ${item.rack.description}`,
+      `📍 ${item.name || item.productName || item.title || 'Unknown Item'}\n\n🏪 Location: ${rack.location || 'Not specified'}\n📍 Aisle: ${rack.aisle || 'Not specified'}\n📝 Description: ${rack.description || 'No description'}`,
       [
         { text: 'Got it!', style: 'default' },
         { 
@@ -91,7 +122,7 @@ const OrderPickingScreen = ({ route, navigation }) => {
   const handleMarkUnavailable = (item) => {
     Alert.alert(
       'Mark Item Unavailable',
-      `Mark "${item.name}" as unavailable?`,
+      `Mark "${item.name || item.productName || item.title || 'Unknown Item'}" as unavailable?`,
       [
         { text: 'Cancel', style: 'cancel' },
         { 
@@ -107,7 +138,7 @@ const OrderPickingScreen = ({ route, navigation }) => {
   };
 
   const checkOrderCompletion = () => {
-    const allItemsProcessed = order.items.every(item => 
+    const allItemsProcessed = items.every(item => 
       item.status === ITEM_STATUS.SCANNED || item.status === ITEM_STATUS.UNAVAILABLE
     );
     
@@ -133,18 +164,20 @@ const OrderPickingScreen = ({ route, navigation }) => {
   const renderItemCard = ({ item }) => (
     <View style={styles.itemCard}>
       <View style={styles.itemHeader}>
-        <Image source={{ uri: item.image }} style={styles.itemImage} />
+        <Image source={{ uri: item.image || '' }} style={styles.itemImage} />
         <View style={styles.itemInfo}>
-          <Text style={styles.itemName}>{item.name}</Text>
-          <Text style={styles.itemCategory}>{item.category}</Text>
-          <Text style={styles.itemDetails}>
-            Qty: {item.quantity} × ${item.price} = ${(item.quantity * item.price).toFixed(2)}
+          <Text style={styles.itemName}>
+            {item.name || item.productName || item.title || 'Unknown Item'}
           </Text>
-          <Text style={styles.barcode}>Barcode: {item.barcode}</Text>
+          <Text style={styles.itemCategory}>{item.category || 'No Category'}</Text>
+          <Text style={styles.itemDetails}>
+            Qty: {item.quantity || 0} × ${item.price || 0} = ${((item.quantity || 0) * (item.price || 0)).toFixed(2)}
+          </Text>
+          <Text style={styles.barcode}>Barcode: {item.barcode || 'No barcode'}</Text>
         </View>
-        <View style={[styles.statusBadge, { backgroundColor: getItemStatusColor(item.status) }]}>
+        <View style={[styles.statusBadge, { backgroundColor: getItemStatusColor(item.status || ITEM_STATUS.PENDING) }]}>
           <Ionicons 
-            name={getItemStatusIcon(item.status)} 
+            name={getItemStatusIcon(item.status || ITEM_STATUS.PENDING)} 
             size={16} 
             color="#FFFFFF" 
           />
@@ -154,14 +187,14 @@ const OrderPickingScreen = ({ route, navigation }) => {
       <View style={styles.rackInfo}>
         <View style={styles.rackHeader}>
           <Ionicons name="location" size={16} color="#007AFF" />
-          <Text style={styles.rackTitle}>Location: {item.rack.location}</Text>
+          <Text style={styles.rackTitle}>Location: {item.rack?.location || 'Not specified'}</Text>
         </View>
-        <Text style={styles.rackAisle}>{item.rack.aisle}</Text>
-        <Text style={styles.rackDescription}>{item.rack.description}</Text>
+        <Text style={styles.rackAisle}>{item.rack?.aisle || 'Aisle not specified'}</Text>
+        <Text style={styles.rackDescription}>{item.rack?.description || 'No description available'}</Text>
       </View>
 
       <View style={styles.itemActions}>
-        {item.status === ITEM_STATUS.PENDING && (
+        {(item.status || ITEM_STATUS.PENDING) === ITEM_STATUS.PENDING && (
           <TouchableOpacity
             style={styles.locateButton}
             onPress={() => handleLocateItem(item)}
@@ -171,7 +204,7 @@ const OrderPickingScreen = ({ route, navigation }) => {
           </TouchableOpacity>
         )}
 
-        {(item.status === ITEM_STATUS.LOCATED || item.status === ITEM_STATUS.PENDING) && (
+        {((item.status || ITEM_STATUS.PENDING) === ITEM_STATUS.LOCATED || (item.status || ITEM_STATUS.PENDING) === ITEM_STATUS.PENDING) && (
           <TouchableOpacity
             style={styles.scanButton}
             onPress={() => handleScanItem(item)}
@@ -181,7 +214,7 @@ const OrderPickingScreen = ({ route, navigation }) => {
           </TouchableOpacity>
         )}
 
-        {item.status !== ITEM_STATUS.SCANNED && item.status !== ITEM_STATUS.UNAVAILABLE && (
+        {(item.status || ITEM_STATUS.PENDING) !== ITEM_STATUS.SCANNED && (item.status || ITEM_STATUS.PENDING) !== ITEM_STATUS.UNAVAILABLE && (
           <TouchableOpacity
             style={styles.unavailableButton}
             onPress={() => handleMarkUnavailable(item)}
@@ -191,11 +224,11 @@ const OrderPickingScreen = ({ route, navigation }) => {
           </TouchableOpacity>
         )}
 
-        {item.status === ITEM_STATUS.SCANNED && (
+        {(item.status || ITEM_STATUS.PENDING) === ITEM_STATUS.SCANNED && (
           <View style={styles.completedIndicator}>
             <Ionicons name="checkmark-circle" size={20} color="#34C759" />
             <Text style={styles.completedText}>
-              Picked {item.pickedQuantity || item.quantity}/{item.quantity}
+              Picked {item.pickedQuantity || item.quantity || 0}/{item.quantity || 0}
             </Text>
           </View>
         )}
@@ -203,14 +236,18 @@ const OrderPickingScreen = ({ route, navigation }) => {
     </View>
   );
 
-  const scannedItems = order.items.filter(item => item.status === ITEM_STATUS.SCANNED).length;
-  const unavailableItems = order.items.filter(item => item.status === ITEM_STATUS.UNAVAILABLE).length;
-  const totalItems = order.items.length;
+  const scannedItems = items.filter(item => item.status === ITEM_STATUS.SCANNED).length;
+  const unavailableItems = items.filter(item => item.status === ITEM_STATUS.UNAVAILABLE).length;
+  const totalItems = items.length;
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
+        <TouchableOpacity 
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
           <Ionicons name="arrow-back" size={24} color="#007AFF" />
         </TouchableOpacity>
         <View style={styles.headerInfo}>
@@ -234,9 +271,14 @@ const OrderPickingScreen = ({ route, navigation }) => {
       </View>
 
       <FlatList
-        data={order.items}
+        data={items}
         renderItem={renderItemCard}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item, index) => {
+          // Ensure we always have a unique key
+          if (item.id) return item.id.toString();
+          if (item.productName) return `${item.productName}_${index}`;
+          return `item_${index}`;
+        }}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
       />
@@ -256,6 +298,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E5E5E5',
+  },
+  backButton: {
+    padding: 8,
+    marginLeft: -8,
+    zIndex: 1,
   },
   headerInfo: {
     flex: 1,
@@ -425,7 +472,32 @@ const styles = StyleSheet.create({
     fontSize: 18,
     color: '#FF3B30',
     textAlign: 'center',
-    marginTop: 50,
+    marginBottom: 8,
+    fontWeight: '600',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  errorDetails: {
+    fontSize: 14,
+    color: '#666666',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  goBackButton: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 8,
+    marginTop: 20,
+  },
+  goBackButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
 
