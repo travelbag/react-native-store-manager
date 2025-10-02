@@ -28,6 +28,24 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
   }, [permission]);
 
   const handleBarCodeScanned = ({ type, data }) => {
+      console.log('Scanned type:', type, 'data:', data);
+
+    // Only process supported barcode types (ignore QR codes)
+    const supportedTypes = ['ean13', 'ean8', 'upc_a', 'upc_e', 'code39', 'code128'];
+
+   console.log('Is supported type:', supportedTypes.includes(type));
+    if (!supportedTypes.includes(type)) {
+      Alert.alert(
+        'Invalid Scan',
+        'Please scan a valid product barcode (not a QR code).',
+        [
+          { text: 'Try Again', onPress: () => setScanned(false) },
+          { text: 'Cancel', onPress: () => navigation.goBack() },
+        ]
+      );
+      return;
+    }
+
     setScanned(true);
     Vibration.vibrate();
 

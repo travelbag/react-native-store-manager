@@ -62,6 +62,7 @@ const OrderCard = ({ order }) => {
   };
 
   const getStatusText = (status) => {
+    console.log('Getting status text for status:', status);
     switch (status) {
       case ORDER_STATUS.PENDING:
         return 'Pending';
@@ -82,17 +83,21 @@ const OrderCard = ({ order }) => {
     }
   };
 
+  const handleAcceptOrder = () => {
+    acceptOrder(orderId);
+    // The status will update via context, and modal will close automatically
+  };
+
   const handleAccept = () => {
     Alert.alert(
       'Accept Order',
       `Accept order #${orderId} from ${customerName}?`,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Accept', onPress: () => acceptOrder(orderId) },
+        { text: 'Accept', onPress: handleAcceptOrder },
       ]
     );
   };
-
   const handleReject = () => {
     Alert.alert(
       'Reject Order',
@@ -105,8 +110,6 @@ const OrderCard = ({ order }) => {
   };
 
   const handleStartPicking = () => {
-    console.log('🛒 Starting picking for orderId:', orderId);
-    console.log('🛒 Original order object:', { id: order?.id, orderId: order?.orderId });
     startPickingOrder(orderId);
     navigation.navigate('OrderPicking', { orderId });
   };
@@ -152,18 +155,15 @@ const OrderCard = ({ order }) => {
       case ORDER_STATUS.PICKING:
         const pickedItems = items?.filter(item => item.status === ITEM_STATUS.SCANNED).length || 0;
         const totalItems = items?.length || 0;
+        const allPicked = pickedItems === totalItems && totalItems > 0;
         return (
           <TouchableOpacity 
             style={styles.primaryButton} 
-            onPress={() => {
-              console.log('🔄 Continue picking for orderId:', orderId);
-              console.log('🔄 Original order object:', { id: order?.id, orderId: order?.orderId });
-              navigation.navigate('OrderPicking', { orderId });
-            }}
+            onPress={() => navigation.navigate('OrderPicking', { orderId })}
           >
             <Ionicons name="location-outline" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
             <Text style={styles.primaryButtonText}>
-              Continue Picking ({pickedItems}/{totalItems})
+              {allPicked ? 'Picking Complete' : `Continue Picking (${pickedItems}/${totalItems})`}
             </Text>
           </TouchableOpacity>
         );

@@ -1,7 +1,8 @@
 // API Configuration
 export const API_CONFIG = {
   // Replace with your actual backend URL
-  BASE_URL: 'http://10.0.2.2:8080/api',
+  //BASE_URL: 'http://10.0.2.2:8080/api',
+  BASE_URL: 'http://192.168.1.250:8080/api',
     //BASE_URL: 'http://localhost:8080/api',
 
   

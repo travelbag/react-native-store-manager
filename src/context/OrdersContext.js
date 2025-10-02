@@ -229,26 +229,7 @@ export function OrdersProvider({ children }) {
       
        // Fetch orders from DB after login
     fetchOrdersFromDB().then(orders => {
-      // If no orders from backend, use sample orders for development
-      if (!orders || orders.length === 0) {
-        console.log('📦 No orders from backend, using sample orders');
-        const sampleOrders = [
-          generateSampleGroceryOrder(),
-          generateSampleGroceryOrder(),
-          generateSampleGroceryOrder(),
-        ];
-        dispatch({ type: ACTIONS.SET_ORDERS, payload: sampleOrders });
-      } else {
-        dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
-      }
-    }).catch(error => {
-      console.error('❌ Error fetching orders, using sample orders:', error);
-      const sampleOrders = [
-        generateSampleGroceryOrder(),
-        generateSampleGroceryOrder(),
-        generateSampleGroceryOrder(),
-      ];
-      dispatch({ type: ACTIONS.SET_ORDERS, payload: sampleOrders });
+      dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
     });initializeNotifications();
     }
   }, [isAuthenticated, manager]);
@@ -266,56 +247,7 @@ const fetchOrdersFromDB = async (status = null) => {
     const data = await response.json();
     // Map DB fields to your frontend order format if needed
     console.log('📦 Orders fetched from DB:', data.orders);
-    
-    // Transform backend orders to frontend format
-    const transformedOrders = (data.orders || []).map(orderRaw => {
-      // Parse items if they are a stringified array
-      let items = [];
-      if (typeof orderRaw.items === 'string') {
-        try {
-          items = JSON.parse(orderRaw.items);
-        } catch (e) {
-          console.error('❌ Error parsing items JSON:', e);
-          items = [];
-        }
-      } else if (Array.isArray(orderRaw.items)) {
-        items = orderRaw.items;
-      }
-
-      return {
-        id: orderRaw.orderId,
-        orderId: orderRaw.orderId,
-        customerName: orderRaw.customerName,
-        items: items.map((item, idx) => ({
-          id: `${orderRaw.orderId}_item_${idx}`,
-          name: item.productName || item.name || '',
-          price: parseFloat(item.price) || 0,
-          quantity: item.quantity || 1,
-          barcode: item.barcode || '',
-          image: item.image || '',
-          category: item.type || '',
-          rack: {
-            location: 'Not specified',
-            aisle: 'Not specified',
-            description: 'No description available'
-          },
-          status: ITEM_STATUS.PENDING,
-          weight: item.weight || '',
-          mrp: item.mrp || '',
-        })),
-        total: orderRaw.totalPrice || '0.00',
-        status: orderRaw.orderStatus || ORDER_STATUS.PENDING,
-        timestamp: orderRaw.orderDate || new Date().toISOString(),
-        deliveryAddress: orderRaw.deliveryAddress || '',
-        phoneNumber: orderRaw.phoneNumber || '',
-        estimatedTime: 30,
-        storeId: orderRaw.storeId || '',
-        paymentType: orderRaw.paymentType || 'Cash',
-        driverId: orderRaw.driverId || null,
-      };
-    });
-    
-    return transformedOrders;
+    return data.orders || [];
   } catch (error) {
     console.error('❌ Error fetching orders from DB:', error);
     return [];

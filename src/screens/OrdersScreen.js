@@ -28,17 +28,13 @@ const OrdersScreen = () => {
   };
 
   const filters = [
-    { key: 'all', label: 'All Orders', count: safeOrders.length },
     { key: ORDER_STATUS.PENDING, label: 'Pending', count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === normalizeStatus(ORDER_STATUS.PENDING)).length },
     { key: ORDER_STATUS.ACCEPTED, label: 'Accepted', count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === normalizeStatus(ORDER_STATUS.ACCEPTED)).length },
-    { key: ORDER_STATUS.PICKING, label: 'Picking', count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === normalizeStatus(ORDER_STATUS.PICKING)).length },
-    { key: ORDER_STATUS.PREPARING, label: 'Preparing', count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === normalizeStatus(ORDER_STATUS.PREPARING)).length },
     { key: ORDER_STATUS.READY, label: 'Ready', count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === normalizeStatus(ORDER_STATUS.READY)).length },
+    { key: ORDER_STATUS.REJECTED, label: 'Cancelled', count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === normalizeStatus(ORDER_STATUS.REJECTED)).length },
   ];
 
-  const filteredOrders = selectedFilter === 'all' 
-    ? safeOrders.filter(order => normalizeStatus(order.status ?? order.orderStatus) !== normalizeStatus(ORDER_STATUS.COMPLETED) && normalizeStatus(order.status ?? order.orderStatus) !== normalizeStatus(ORDER_STATUS.REJECTED))
-    : safeOrders.filter(order => normalizeStatus(order.status ?? order.orderStatus) === normalizeStatus(selectedFilter));
+  const filteredOrders = safeOrders.filter(order => normalizeStatus(order.status ?? order.orderStatus) === normalizeStatus(selectedFilter));
 
     //console.log('Filtered Orders:', filteredOrders);
   const onRefresh = () => {
@@ -144,7 +140,7 @@ const OrdersScreen = () => {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+  <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <View style={styles.headerMain}>
           <Text style={styles.headerTitle}>Store Manager</Text>
