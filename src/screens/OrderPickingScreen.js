@@ -53,23 +53,7 @@ const OrderPickingScreen = ({ route, navigation }) => {
     );
   }
 
-  // Show accept/reject alert for pending orders every time screen is focused
-  const React = require('react');
-  const { useFocusEffect } = require('@react-navigation/native');
-  useFocusEffect(
-    React.useCallback(() => {
-      if (order && order.status === ORDER_STATUS.PENDING) {
-        Alert.alert(
-          'Accept Order',
-          `Accept order #${order.id} from ${order.customerName}?`,
-          [
-            { text: 'Cancel', style: 'cancel', onPress: () => navigation.goBack() },
-            { text: 'Accept', onPress: () => updateOrderStatus(order.id, ORDER_STATUS.ACCEPTED) },
-          ]
-        );
-      }
-    }, [order])
-  );
+  // Removed duplicate accept/reject alert logic. Only OrderCard shows the alert.
   const getItemStatusColor = (status) => {
     switch (status) {
       case ITEM_STATUS.PENDING:

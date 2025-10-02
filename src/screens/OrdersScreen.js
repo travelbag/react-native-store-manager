@@ -17,7 +17,7 @@ import OrderCard from '../components/OrderCard';
 const OrdersScreen = () => {
   const { orders, loading } = useOrders();
   const { manager, logout } = useAuth();
-  const [selectedFilter, setSelectedFilter] = useState('all');
+  const [selectedFilter, setSelectedFilter] = useState(ORDER_STATUS.PENDING);
   const [refreshing, setRefreshing] = useState(false);
 
   const safeOrders = Array.isArray(orders) ? orders : [];

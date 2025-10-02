@@ -83,20 +83,20 @@ const OrderCard = ({ order }) => {
     }
   };
 
-  const handleAcceptOrder = () => {
-    acceptOrder(orderId);
-    // The status will update via context, and modal will close automatically
-  };
-
-  const handleAccept = () => {
-    Alert.alert(
-      'Accept Order',
-      `Accept order #${orderId} from ${customerName}?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Accept', onPress: handleAcceptOrder },
-      ]
-    );
+  // Directly accept order when green Accept button is clicked (no Alert)
+  const handleAcceptOrder = async () => {
+    await acceptOrder(orderId);
+    // Force refresh by navigating to Accepted tab if available
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+    }
+    // Optionally, emit a custom event to trigger refresh in parent
+    if (navigation.emit) {
+      navigation.emit({
+        type: 'tabPress',
+        target: 'Accepted',
+      });
+    }
   };
   const handleReject = () => {
     Alert.alert(
@@ -140,7 +140,7 @@ const OrderCard = ({ order }) => {
             <TouchableOpacity style={styles.rejectButton} onPress={handleReject}>
               <Text style={styles.rejectButtonText}>Reject</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.acceptButton} onPress={handleAccept}>
+            <TouchableOpacity style={styles.acceptButton} onPress={handleAcceptOrder}>
               <Text style={styles.acceptButtonText}>Accept</Text>
             </TouchableOpacity>
           </View>

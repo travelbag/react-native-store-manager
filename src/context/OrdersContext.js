@@ -54,6 +54,11 @@ function ordersReducer(state, action) {
       return { ...state, error: action.payload, loading: false };
     
     case ACTIONS.ADD_ORDER:
+      // Prevent duplicate orders by order.id
+      const existingIds = state.orders.map(o => o.id);
+      if (existingIds.includes(action.payload.id)) {
+        return state;
+      }
       return {
         ...state,
         orders: [action.payload, ...state.orders],
@@ -93,7 +98,16 @@ function ordersReducer(state, action) {
       };
     
     case ACTIONS.SET_ORDERS:
-      return { ...state, orders: action.payload, loading: false };
+      // Remove duplicate orders by id
+      const uniqueOrders = [];
+      const seenIds = new Set();
+      for (const order of action.payload) {
+        if (!seenIds.has(order.id)) {
+          uniqueOrders.push(order);
+          seenIds.add(order.id);
+        }
+      }
+      return { ...state, orders: uniqueOrders, loading: false };
     
     case ACTIONS.REMOVE_ORDER:
       return {
