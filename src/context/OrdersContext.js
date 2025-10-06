@@ -11,7 +11,7 @@ const OrdersContext = createContext();
 export const ORDER_STATUS = {
   PENDING: 'pending',
   ACCEPTED: 'accepted',
-  PICKING: 'picking', // New status for item picking
+  PICKING: 'picked', // New status for item picking
   PREPARING: 'preparing',
   READY: 'ready',
   COMPLETED: 'completed',
@@ -54,9 +54,9 @@ function ordersReducer(state, action) {
       return { ...state, error: action.payload, loading: false };
     
     case ACTIONS.ADD_ORDER:
-      // Prevent duplicate orders by order.id
-      const existingIds = state.orders.map(o => o.id);
-      if (existingIds.includes(action.payload.id)) {
+      // Prevent duplicate orders by orderId (backend key)
+      const existingOrderIds = state.orders.map(o => o.orderId || o.id);
+      if (existingOrderIds.includes(action.payload.orderId || action.payload.id)) {
         return state;
       }
       return {
@@ -68,11 +68,16 @@ function ordersReducer(state, action) {
     case ACTIONS.UPDATE_ORDER_STATUS:
       return {
         ...state,
-        orders: state.orders.map(order =>
-          order.id === action.payload.orderId
-            ? { ...order, status: action.payload.status }
-            : order
-        ),
+        orders: state.orders.map(order => {
+          if (order.id === action.payload.orderId || order.orderId === action.payload.orderId) {
+            return {
+              ...order,
+              status: action.payload.status,
+              orderStatus: action.payload.status
+            };
+          }
+          return order;
+        }),
       };
     
     case ACTIONS.UPDATE_ITEM_STATUS:
@@ -98,13 +103,14 @@ function ordersReducer(state, action) {
       };
     
     case ACTIONS.SET_ORDERS:
-      // Remove duplicate orders by id
+      // Remove duplicate orders by orderId (backend key)
       const uniqueOrders = [];
-      const seenIds = new Set();
+      const seenOrderIds = new Set();
       for (const order of action.payload) {
-        if (!seenIds.has(order.id)) {
+        const key = order.orderId || order.id;
+        if (!seenOrderIds.has(key)) {
           uniqueOrders.push(order);
-          seenIds.add(order.id);
+          seenOrderIds.add(key);
         }
       }
       return { ...state, orders: uniqueOrders, loading: false };
@@ -590,8 +596,31 @@ const fetchOrdersFromDB = async (status = null) => {
     updateOrderStatus(orderId, ORDER_STATUS.PREPARING);
   };
 
-  const markOrderReady = (orderId) => {
-    updateOrderStatus(orderId, ORDER_STATUS.READY);
+  const markOrderReady = async (orderId) => {
+    console.log('✅ Marking order as READY, ID:', orderId);
+    try {
+      // Update backend
+      const response = await fetch(buildApiUrl(`/orders/${orderId}/status`), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ status: ORDER_STATUS.READY }),
+      });
+      console.log('🔄 Mark ready API response status:', response.status);
+      if (response.ok) {
+        console.log('✅ Order marked as READY in backend');
+        // Refetch orders from backend to update UI
+        const orders = await fetchOrdersFromDB();
+        dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
+      } else {
+        console.error('❌ Failed to mark order as READY in backend:', response.status);
+        // Still update frontend state for now
+        updateOrderStatus(orderId, ORDER_STATUS.READY);
+      }
+    } catch (error) {
+      console.error('❌ Error marking order as READY:', error);
+      // Still update frontend state for now
+      updateOrderStatus(orderId, ORDER_STATUS.READY);
+    }
   };
 
   const completeOrder = (orderId) => {

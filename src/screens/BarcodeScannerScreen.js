@@ -32,15 +32,25 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
 
     // Only process supported barcode types (ignore QR codes)
     const supportedTypes = ['ean13', 'ean8', 'upc_a', 'upc_e', 'code39', 'code128'];
-
-   console.log('Is supported type:', supportedTypes.includes(type));
-    if (!supportedTypes.includes(type)) {
+    // Debug: Show type and typeof
+    console.log('Type:', type, 'typeof:', typeof type);
+    // Debug: Show supportedTypes array and typeof each
+    supportedTypes.forEach(t => {
+      console.log('Supported type:', t, 'typeof:', typeof t, 'Compare:', t === String(type));
+    });
+    // Debug: Show normalizedType and compare
+    const normalizedType = String(type).toLowerCase().trim();
+    console.log('Normalized type:', normalizedType);
+    supportedTypes.forEach(t => {
+      console.log('Compare normalized:', t, '===', normalizedType, t === normalizedType);
+    });
+    if (!supportedTypes.includes(normalizedType)) {
       Alert.alert(
         'Invalid Scan',
-        'Please scan a valid product barcode (not a QR code).',
+        `Please scan a valid product barcode (not a QR code).\nType received: ${type}`,
         [
           { text: 'Try Again', onPress: () => setScanned(false) },
-          { text: 'Cancel', onPress: () => navigation.goBack() },
+          { text: 'Cancel', onPress: () => navigation.canGoBack && navigation.canGoBack() ? navigation.goBack() : null },
         ]
       );
       return;
@@ -75,10 +85,14 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
         {
           text: 'OK',
           onPress: () => {
-            navigation.goBack();
-            if (route.params.onScanSuccess) {
-              route.params.onScanSuccess(scannedData || expectedBarcode, quantity);
-            }
+            setTimeout(() => {
+              navigation.goBack();
+              if (route.params.onScanSuccess) {
+                setTimeout(() => {
+                  route.params.onScanSuccess(scannedData || expectedBarcode, quantity);
+                }, 200);
+              }
+            }, 200); // Delay navigation to allow alert to close
           },
         },
       ]

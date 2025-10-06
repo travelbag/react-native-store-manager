@@ -141,14 +141,29 @@ const OrderPickingScreen = ({ route, navigation }) => {
 
     if (allItemsProcessed) {
       // Update order status to READY automatically
-      updateOrderStatus(orderId, ORDER_STATUS.READY);
-      Alert.alert(
-        'Order Picking Complete!',
-        'All items have been picked or marked unavailable. The order is now READY for delivery or pickup.',
-        [
-          { text: 'OK', onPress: () => navigation.goBack() }
-        ]
-      );
+      if (typeof markOrderReady === 'function') {
+        markOrderReady(orderId);
+      } else {
+        updateOrderStatus(orderId, ORDER_STATUS.READY);
+      }
+      setTimeout(() => {
+        Alert.alert(
+          'Order Picking Complete!',
+          'All items have been picked or marked unavailable. The order is now READY for delivery or pickup.',
+          [
+            { 
+              text: 'OK', 
+              onPress: () => {
+                if (navigation.canGoBack && navigation.canGoBack()) {
+                  navigation.goBack();
+                } else {
+                  navigation.navigate('Orders'); // Change 'Orders' to your main orders screen name if different
+                }
+              }
+            }
+          ]
+        );
+      }, 350); // Delay to allow navigation stack to settle
     }
   };
 
@@ -229,6 +244,7 @@ const OrderPickingScreen = ({ route, navigation }) => {
   const unavailableItems = order.items.filter(item => item.status === ITEM_STATUS.UNAVAILABLE).length;
   const totalItems = order.items.length;
 
+  const allPickedOrUnavailable = scannedItems + unavailableItems === totalItems && totalItems > 0;
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
@@ -263,6 +279,28 @@ const OrderPickingScreen = ({ route, navigation }) => {
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
       />
+
+      {allPickedOrUnavailable && (order.status !== ORDER_STATUS.READY && order.orderStatus !== ORDER_STATUS.READY) && (
+        <View style={{ padding: 16 }}>
+          <TouchableOpacity
+            style={{
+              backgroundColor: '#34C759',
+              paddingVertical: 16,
+              borderRadius: 8,
+              alignItems: 'center',
+              marginTop: 8,
+            }}
+            onPress={async () => {
+              if (typeof markOrderReady === 'function') {
+                await markOrderReady(order.id);
+              }
+              navigation.goBack();
+            }}
+          >
+            <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>Mark Order Ready</Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </SafeAreaView>
   );
 };
