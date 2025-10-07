@@ -133,6 +133,23 @@ const OrderCard = ({ order }) => {
   };
 
   const renderActionButtons = () => {
+    // Show Assign Driver button for orders in Ready tab (status 'ready' or all items picked in 'picking')
+    const pickedItems = items?.filter(item => item.status === ITEM_STATUS.SCANNED).length || 0;
+    const totalItems = items?.length || 0;
+    const allPicked = pickedItems === totalItems && totalItems > 0;
+    // Show Assign Driver button if all items are picked (picked state)
+    console.log('Render action buttons for status:', status, 'pickedItems:', pickedItems, 'totalItems:', totalItems, 'allPicked:', allPicked);  
+    if (
+      status === ORDER_STATUS.READY ||
+      (status === ORDER_STATUS.PICKING )
+    ) {
+      return (
+        <TouchableOpacity style={styles.primaryButton} onPress={() => {/* TODO: assign driver logic here */}}>
+          <Ionicons name="car-outline" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
+          <Text style={styles.primaryButtonText}>Assign Driver</Text>
+        </TouchableOpacity>
+      );
+    }
     switch (status) {
       case ORDER_STATUS.PENDING:
         return (
@@ -153,9 +170,6 @@ const OrderCard = ({ order }) => {
           </TouchableOpacity>
         );
       case ORDER_STATUS.PICKING:
-        const pickedItems = items?.filter(item => item.status === ITEM_STATUS.SCANNED).length || 0;
-        const totalItems = items?.length || 0;
-        const allPicked = pickedItems === totalItems && totalItems > 0;
         return (
           <TouchableOpacity 
             style={styles.primaryButton} 
@@ -163,7 +177,7 @@ const OrderCard = ({ order }) => {
           >
             <Ionicons name="location-outline" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
             <Text style={styles.primaryButtonText}>
-              {allPicked ? 'Picking Complete' : `Continue Picking (${pickedItems}/${totalItems})`}
+              {`Continue Picking (${pickedItems}/${totalItems})`}
             </Text>
           </TouchableOpacity>
         );
@@ -172,13 +186,6 @@ const OrderCard = ({ order }) => {
           <TouchableOpacity style={styles.primaryButton} onPress={handleMarkReady}>
             <Ionicons name="checkmark-outline" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
             <Text style={styles.primaryButtonText}>Mark Ready</Text>
-          </TouchableOpacity>
-        );
-      case ORDER_STATUS.READY:
-        return (
-          <TouchableOpacity style={styles.primaryButton} onPress={handleComplete}>
-            <Ionicons name="bag-check-outline" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
-            <Text style={styles.primaryButtonText}>Complete Order</Text>
           </TouchableOpacity>
         );
       default:
