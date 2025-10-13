@@ -9,10 +9,13 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useOrders, ORDER_STATUS, ITEM_STATUS } from '../context/OrdersContext';
+import { useAuth } from '../context/AuthContext';
 import { useNavigation } from '@react-navigation/native';
+import { assignDriver } from '../services/DriverService';
 
 const OrderCard = ({ order }) => {
   const navigation = useNavigation();
+  const { manager } = useAuth();
   const {
     acceptOrder,
     rejectOrder,
@@ -133,23 +136,41 @@ const OrderCard = ({ order }) => {
   };
 
   const renderActionButtons = () => {
-    // Show Assign Driver button for orders in Ready tab (status 'ready' or all items picked in 'picking')
     const pickedItems = items?.filter(item => item.status === ITEM_STATUS.SCANNED).length || 0;
     const totalItems = items?.length || 0;
     const allPicked = pickedItems === totalItems && totalItems > 0;
-    // Show Assign Driver button if all items are picked (picked state)
-    console.log('Render action buttons for status:', status, 'pickedItems:', pickedItems, 'totalItems:', totalItems, 'allPicked:', allPicked);  
+    // Show Assign Driver button if status is PICKED or READY, or all items are picked during PICKING
     if (
       status === ORDER_STATUS.READY ||
-      (status === ORDER_STATUS.PICKING )
+      status === ORDER_STATUS.PICKED ||
+      (status === ORDER_STATUS.PICKING && allPicked)
     ) {
+      let buttonText = 'Assign Driver';
+      if (status === ORDER_STATUS.PICKED) {
+        buttonText = 'Assign Driver'; // You can change this to any custom text for PICKED status
+      }
+      const handleAssignDriver = async () => {
+        console.log('Assigning driver for order:', orderId);
+        console.log('Assign Driver button pressed', { orderId, manager });
+        const storeId = manager?.storeId || manager?.store_id || '';
+        try {
+          await assignDriver(orderId, storeId);
+          Alert.alert('Success', 'Driver assigned successfully!');
+        } catch (error) {
+          Alert.alert('Error', error.message || 'Failed to assign driver');
+        }
+      };
       return (
-        <TouchableOpacity style={styles.primaryButton} onPress={() => {/* TODO: assign driver logic here */}}>
+        <TouchableOpacity
+          style={styles.primaryButton}
+          onPress={handleAssignDriver}
+        >
           <Ionicons name="car-outline" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
-          <Text style={styles.primaryButtonText}>Assign Driver</Text>
+          <Text style={styles.primaryButtonText}>{buttonText}</Text>
         </TouchableOpacity>
       );
     }
+    // Fallback to default action buttons
     switch (status) {
       case ORDER_STATUS.PENDING:
         return (
@@ -170,15 +191,23 @@ const OrderCard = ({ order }) => {
           </TouchableOpacity>
         );
       case ORDER_STATUS.PICKING:
+        const handleAssignDriver = async () => {
+          console.log('Assigning driver for order:', orderId);
+          const storeId = manager?.storeId || manager?.store_id || '';
+          try {
+            await assignDriver(orderId, storeId);
+            Alert.alert('Success', 'Driver assigned successfully!');
+          } catch (error) {
+            Alert.alert('Error', error.message || 'Failed to assign driver');
+          }
+        };
         return (
           <TouchableOpacity 
             style={styles.primaryButton} 
-            onPress={() => navigation.navigate('OrderPicking', { orderId })}
+            onPress={handleAssignDriver}
           >
-            <Ionicons name="location-outline" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
-            <Text style={styles.primaryButtonText}>
-              {`Continue Picking (${pickedItems}/${totalItems})`}
-            </Text>
+            <Ionicons name="car-outline" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
+            <Text style={styles.primaryButtonText}>Assign Driver</Text>
           </TouchableOpacity>
         );
       case ORDER_STATUS.PREPARING:
