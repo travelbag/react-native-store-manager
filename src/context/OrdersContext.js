@@ -16,7 +16,7 @@ export const ORDER_STATUS = {
   READY: 'ready',
   COMPLETED: 'completed',
   REJECTED: 'rejected',
-  ASSIGNED: 'assigned',
+  ASSIGNED: 'Assigned',
 };
 
 // Item statuses for tracking individual product pickup

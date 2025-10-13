@@ -12,6 +12,7 @@ import { useOrders, ORDER_STATUS, ITEM_STATUS } from '../context/OrdersContext';
 import { useAuth } from '../context/AuthContext';
 import { useNavigation } from '@react-navigation/native';
 import { assignDriver } from '../services/DriverService';
+import { useEffect } from 'react';
 
 const OrderCard = ({ order }) => {
   const navigation = useNavigation();
@@ -23,6 +24,8 @@ const OrderCard = ({ order }) => {
     startPreparingOrder,
     markOrderReady,
     completeOrder,
+  addOrder,
+  fetchOrderDetails,
   } = useOrders();
 
   // Map backend fields to frontend expected fields
@@ -81,6 +84,8 @@ const OrderCard = ({ order }) => {
         return 'Completed';
       case ORDER_STATUS.REJECTED:
         return 'Rejected';
+      case ORDER_STATUS.ASSIGNED:
+        return 'Assigned';
       default:
         return 'Unknown';
     }
@@ -155,6 +160,13 @@ const OrderCard = ({ order }) => {
         const storeId = manager?.storeId || manager?.store_id || '';
         try {
           await assignDriver(orderId, storeId);
+          // Fetch updated order from backend and update frontend state
+          if (typeof fetchOrderDetails === 'function' && typeof addOrder === 'function') {
+            const updatedOrder = await fetchOrderDetails(orderId);
+            if (updatedOrder) {
+              addOrder(updatedOrder);
+            }
+          }
           Alert.alert('Success', 'Driver assigned successfully!');
         } catch (error) {
           Alert.alert('Error', error.message || 'Failed to assign driver');
