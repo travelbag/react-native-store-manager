@@ -229,8 +229,15 @@ const OrderCard = ({ order }) => {
           <Text style={styles.orderId}>Order #{orderId}</Text>
           <Text style={styles.customerName}>{customerName}</Text>
           <Text style={styles.time}>{formatTime(timestamp)}</Text>
+          {/* Show driver info if assigned */}
+          {status.toLowerCase() === 'assigned' && (
+            <View style={{ marginTop: 4 }}>
+              <Text style={{ fontWeight: 'bold', color: '#007AFF' }}>Driver: {order.driverName || 'N/A'}</Text>
+              <Text style={{ color: '#333' }}>Driver Phone: {order.driverPhone || order.driverNumber || order.driverMobile || 'N/A'}</Text>
+            </View>
+          )}
         </View>
-        <View style={[styles.statusBadge, { backgroundColor: getStatusColor(status) }]}>
+        <View style={[styles.statusBadge, { backgroundColor: getStatusColor(status) }]}> 
           <Text style={styles.statusText}>{getStatusText(status)}</Text>
         </View>
       </View>

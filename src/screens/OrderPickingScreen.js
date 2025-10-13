@@ -43,7 +43,8 @@ const OrderPickingScreen = ({ route, navigation }) => {
   const { orderId } = route.params;
   const { orders, updateItemStatus, scanBarcode, markItemUnavailable, updateOrderStatus } = useOrders();
 
-  const order = orders.find(o => o.id === orderId);
+  // Find order by id or orderId for compatibility
+  const order = orders.find(o => o.id === orderId || o.orderId === orderId);
 
   if (!order) {
     return (

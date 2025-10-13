@@ -34,15 +34,21 @@ const OrdersScreen = () => {
       const s = normalizeStatus(o.status ?? o.orderStatus);
       return s === normalizeStatus(ORDER_STATUS.READY) || s === normalizeStatus(ORDER_STATUS.PICKING);
     }).length },
+    { key: ORDER_STATUS.ASSIGNED, label: 'Assigned', count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === normalizeStatus(ORDER_STATUS.ASSIGNED)).length },
     { key: ORDER_STATUS.REJECTED, label: 'Cancelled', count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === normalizeStatus(ORDER_STATUS.REJECTED)).length },
   ];
 
-  const filteredOrders = selectedFilter === ORDER_STATUS.READY
-    ? safeOrders.filter(order => {
-        const s = normalizeStatus(order.status ?? order.orderStatus);
-        return s === normalizeStatus(ORDER_STATUS.READY) || s === normalizeStatus(ORDER_STATUS.PICKING);
-      })
-    : safeOrders.filter(order => normalizeStatus(order.status ?? order.orderStatus) === normalizeStatus(selectedFilter));
+  let filteredOrders = [];
+  if (selectedFilter === ORDER_STATUS.READY) {
+    filteredOrders = safeOrders.filter(order => {
+      const s = normalizeStatus(order.status ?? order.orderStatus);
+      return s === normalizeStatus(ORDER_STATUS.READY) || s === normalizeStatus(ORDER_STATUS.PICKING);
+    });
+  } else if (selectedFilter === ORDER_STATUS.ASSIGNED) {
+    filteredOrders = safeOrders.filter(order => normalizeStatus(order.status ?? order.orderStatus) === normalizeStatus(ORDER_STATUS.ASSIGNED));
+  } else {
+    filteredOrders = safeOrders.filter(order => normalizeStatus(order.status ?? order.orderStatus) === normalizeStatus(selectedFilter));
+  }
 
     //console.log('Filtered Orders:', filteredOrders);
   const onRefresh = () => {
@@ -185,9 +191,9 @@ const OrdersScreen = () => {
         data={filteredOrders}
         renderItem={renderOrderItem}
         keyExtractor={(item, index) => {
-          // Use id if available and unique, else fallback to index
-          const key = item?.id ? item.id.toString() : `order-${index}`;
-          return key;
+          // Use id if available and unique, else fallback to orderId+index
+          const id = item?.id || item?.orderId;
+          return id ? `${id}` : `order-${index}`;
         }}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
