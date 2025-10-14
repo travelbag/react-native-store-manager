@@ -12,6 +12,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 
 const BarcodeScannerScreen = ({ route, navigation }) => {
+  // Reset scanner state when itemId changes (for multi-item scanning)
+  useEffect(() => {
+    setScanned(false);
+    setPickedQuantity(1);
+    setShowQuantitySelector(false);
+  }, [itemId]);
   const { orderId, itemId, expectedBarcode, itemName, requiredQuantity = 1 } = route.params;
   const [scanned, setScanned] = useState(false);
   const [pickedQuantity, setPickedQuantity] = useState(1);
@@ -85,13 +91,15 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
         {
           text: 'OK',
           onPress: () => {
+            if (route.params.onScanSuccess) {
+              route.params.onScanSuccess(scannedData || expectedBarcode, quantity);
+            }
             setTimeout(() => {
-              navigation.goBack();
-              if (route.params.onScanSuccess) {
-                setTimeout(() => {
-                  route.params.onScanSuccess(scannedData || expectedBarcode, quantity);
-                }, 200);
-              }
+            navigation.navigate({
+  name: 'OrderPicking',
+  params: { orderId, scanSuccess: true },
+  merge: true,
+});
             }, 200); // Delay navigation to allow alert to close
           },
         },

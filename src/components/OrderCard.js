@@ -117,9 +117,15 @@ const OrderCard = ({ order }) => {
     );
   };
 
-  const handleStartPicking = () => {
-  //startPickingOrder(orderId); // Only set to PICKING when picking actually starts
-  navigation.navigate('OrderPicking', { orderId });
+  const handleStartPicking = async () => {
+    console.log('OrderCard handleStartPicking orderId:', orderId, 'order:', order);
+    if (!orderId) {
+      console.warn('OrderCard: Cannot start picking, orderId is missing!', order);
+      Alert.alert('Error', 'Order ID is missing. Cannot start picking for this order.');
+      return;
+    }
+    await startPickingOrder(orderId);
+    navigation.navigate('OrderPicking', { orderId });
   };
 
   const handleStartPreparing = () => {
@@ -152,7 +158,7 @@ const OrderCard = ({ order }) => {
     ) {
       let buttonText = 'Assign Driver';
       if (status === ORDER_STATUS.PICKED) {
-        buttonText = 'Assign Driver'; // You can change this to any custom text for PICKED status
+        buttonText = 'Assign Driver';
       }
       const handleAssignDriver = async () => {
         console.log('Assigning driver for order:', orderId);
@@ -166,6 +172,11 @@ const OrderCard = ({ order }) => {
             if (updatedOrder) {
               addOrder(updatedOrder);
             }
+          }
+          // Immediately update status to ASSIGNED in frontend so order moves tab
+          if (typeof addOrder === 'function') {
+            console.log('Updating order status to ASSIGNED in frontend for orderId:', orderId);
+            addOrder({ ...order, status: ORDER_STATUS.ASSIGNED, orderStatus: ORDER_STATUS.ASSIGNED });
           }
           Alert.alert('Success', 'Driver assigned successfully!');
         } catch (error) {

@@ -55,14 +55,12 @@ function ordersReducer(state, action) {
       return { ...state, error: action.payload, loading: false };
     
     case ACTIONS.ADD_ORDER:
-      // Prevent duplicate orders by orderId (backend key)
-      const existingOrderIds = state.orders.map(o => o.orderId || o.id);
-      if (existingOrderIds.includes(action.payload.orderId || action.payload.id)) {
-        return state;
-      }
+      // Replace existing order if present, otherwise add new
+      const newOrderId = action.payload.orderId || action.payload.id;
+      const orders = state.orders.filter(o => (o.orderId || o.id) !== newOrderId);
       return {
         ...state,
-        orders: [action.payload, ...state.orders],
+        orders: [action.payload, ...orders],
         loading: false,
       };
     
@@ -84,23 +82,34 @@ function ordersReducer(state, action) {
     case ACTIONS.UPDATE_ITEM_STATUS:
       return {
         ...state,
-        orders: state.orders.map(order =>
-          order.id === action.payload.orderId
-            ? {
-                ...order,
-                items: order.items.map(item =>
-                  item.id === action.payload.itemId
-                    ? { 
-                        ...item, 
-                        status: action.payload.status, 
-                        scannedAt: action.payload.scannedAt,
-                        pickedQuantity: action.payload.pickedQuantity
-                      }
-                    : item
-                )
+        orders: state.orders.map(order => {
+          if (order.id === action.payload.orderId) {
+            let items = [];
+            if (Array.isArray(order.items)) {
+              items = order.items;
+            } else if (typeof order.items === 'string') {
+              try {
+                items = JSON.parse(order.items);
+              } catch {
+                items = [];
               }
-            : order
-        ),
+            }
+            return {
+              ...order,
+              items: items.map(item =>
+                item.id === action.payload.itemId
+                  ? { 
+                      ...item, 
+                      status: action.payload.status, 
+                      scannedAt: action.payload.scannedAt,
+                      pickedQuantity: action.payload.pickedQuantity
+                    }
+                  : item
+              )
+            };
+          }
+          return order;
+        }),
       };
     
     case ACTIONS.SET_ORDERS:
@@ -576,8 +585,17 @@ const fetchOrdersFromDB = async (status = null) => {
 
   const scanBarcode = (orderId, itemId, scannedBarcode, pickedQuantity = 1) => {
     const order = state.orders.find(o => o.id === orderId);
-    const item = order?.items.find(i => i.id === itemId);
-    
+    let items = [];
+    if (Array.isArray(order?.items)) {
+      items = order.items;
+    } else if (typeof order?.items === 'string') {
+      try {
+        items = JSON.parse(order.items);
+      } catch {
+        items = [];
+      }
+    }
+    const item = items.find(i => i.id === itemId);
     if (item && item.barcode === scannedBarcode) {
       updateItemStatus(orderId, itemId, ITEM_STATUS.SCANNED, new Date().toISOString(), pickedQuantity);
       return { 
