@@ -118,8 +118,8 @@ const OrderCard = ({ order }) => {
   };
 
   const handleStartPicking = () => {
-    startPickingOrder(orderId);
-    navigation.navigate('OrderPicking', { orderId });
+  //startPickingOrder(orderId); // Only set to PICKING when picking actually starts
+  navigation.navigate('OrderPicking', { orderId });
   };
 
   const handleStartPreparing = () => {
