@@ -2,8 +2,9 @@
 export const API_CONFIG = {
   // Replace with your actual backend URL
   //BASE_URL: 'http://10.0.2.2:8080/api',
-  BASE_URL: 'http://192.168.1.211:8080/api',
+  //BASE_URL: 'http://192.168.29.117:8080/api',
     //BASE_URL: 'http://localhost:8080/api',
+  BASE_URL: 'https://ubgukf7hdu.us-east-1.awsapprunner.com/api',
 
   
   // Store Manager Configuration - will be set from logged in user
