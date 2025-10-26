@@ -16,7 +16,7 @@ export const ORDER_STATUS = {
   READY: 'ready',
   COMPLETED: 'completed',
   REJECTED: 'rejected',
-  ASSIGNED: 'Assigned',
+  ASSIGNED: 'assigned',
 };
 
 // Item statuses for tracking individual product pickup
@@ -130,7 +130,7 @@ function ordersReducer(state, action) {
         ...state,
         orders: state.orders.filter(order => order.id !== action.payload),
       };
-    
+            // Helper to ensure order.items is always an array and normalize shape
     default:
       return state;
   }

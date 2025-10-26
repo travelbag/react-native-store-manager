@@ -41,7 +41,9 @@ const OrderCard = ({ order }) => {
   // Fallbacks for other fields
   const customerName = order?.customerName || '';
   const timestamp = order?.timestamp || order?.orderDate || '';
-  const status = order?.status || order?.orderStatus || 'N/A';
+  const statusRaw = order?.status || order?.orderStatus || '';
+  const status = String(statusRaw || '');
+  const statusNormalized = status.toLowerCase();
   const total = order?.total || order?.totalPrice || 0;
   const deliveryAddress = order?.deliveryAddress || '';
   const phoneNumber = order?.phoneNumber || '';
@@ -67,24 +69,25 @@ const OrderCard = ({ order }) => {
     }
   };
 
-  const getStatusText = (status) => {
-    console.log('Getting status text for status:', status);
-    switch (status) {
-      case ORDER_STATUS.PENDING:
+  const getStatusText = (s) => {
+    const key = String(s || '').toLowerCase();
+    switch (key) {
+      case 'pending':
         return 'Pending';
-      case ORDER_STATUS.ACCEPTED:
+      case 'accepted':
         return 'Accepted';
-      case ORDER_STATUS.PICKING:
+      case 'picking':
+      case 'picked': // handle legacy value
         return 'Picking Items';
-      case ORDER_STATUS.PREPARING:
+      case 'preparing':
         return 'Preparing';
-      case ORDER_STATUS.READY:
+      case 'ready':
         return 'Ready';
-      case ORDER_STATUS.COMPLETED:
+      case 'completed':
         return 'Completed';
-      case ORDER_STATUS.REJECTED:
+      case 'rejected':
         return 'Rejected';
-      case ORDER_STATUS.ASSIGNED:
+      case 'assigned':
         return 'Assigned';
       default:
         return 'Unknown';
@@ -152,12 +155,12 @@ const OrderCard = ({ order }) => {
     const allPicked = pickedItems === totalItems && totalItems > 0;
     // Show Assign Driver button if status is PICKED or READY, or all items are picked during PICKING
     if (
-      status === ORDER_STATUS.READY ||
-      status === ORDER_STATUS.PICKED ||
-      (status === ORDER_STATUS.PICKING && allPicked)
+      statusNormalized === 'ready' ||
+      statusNormalized === 'picked' ||
+      (statusNormalized === 'picking' && allPicked)
     ) {
       let buttonText = 'Assign Driver';
-      if (status === ORDER_STATUS.PICKED) {
+      if (statusNormalized === 'picked') {
         buttonText = 'Assign Driver';
       }
       const handleAssignDriver = async () => {
@@ -194,8 +197,8 @@ const OrderCard = ({ order }) => {
       );
     }
     // Fallback to default action buttons
-    switch (status) {
-      case ORDER_STATUS.PENDING:
+    switch (statusNormalized) {
+      case 'pending':
         return (
           <View style={styles.actionButtons}>
             <TouchableOpacity style={styles.rejectButton} onPress={handleReject}>
@@ -206,7 +209,7 @@ const OrderCard = ({ order }) => {
             </TouchableOpacity>
           </View>
         );
-      case ORDER_STATUS.ACCEPTED:
+      case 'accepted':
         return (
           <TouchableOpacity style={styles.primaryButton} onPress={handleStartPicking}>
             <Ionicons name="basket-outline" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
