@@ -16,9 +16,12 @@ export const API_CONFIG = {
     LOGIN: '/store-managers/login',
     VERIFY_TOKEN: '/store-managers/verify',
     REGISTER_TOKEN: '/store-managers/{id}/register-token',
-    ORDERS: '/api/orders',
+    // Keep endpoints relative to BASE_URL (which already ends with /api)
+    ORDERS: '/orders',
     ORDER_DETAILS: '/orders', // /{orderId}
     UPDATE_ORDER_STATUS: '/orders', // /{orderId}/status
+    // Persist item-level scan state
+    UPDATE_ITEM_SCAN: 'api/orders', // /{orderId}/items/{barcode}/scan
   },
   
   // Demo mode - set to false in production

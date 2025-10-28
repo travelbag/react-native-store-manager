@@ -15,7 +15,7 @@ import { useOrders, ITEM_STATUS, ORDER_STATUS } from '../context/OrdersContext';
 const OrderPickingScreen = ({ route, navigation }) => {
   const [allPickedOrUnavailable, setAllPickedOrUnavailable] = useState(false);
   const { orderId } = route.params;
-  const { orders, updateItemStatus, scanBarcode, markItemUnavailable, updateOrderStatus, markOrderReady } = useOrders();
+  const { orders, updateItemStatus, scanBarcode, markItemUnavailable, updateOrderStatus, markOrderReady, persistItemScan } = useOrders();
 
   // Find order by id or orderId for compatibility
   const order = orders.find(o => o.id === orderId || o.orderId === orderId);
@@ -177,7 +177,21 @@ const handleScanItem = (item) => {
     expectedBarcode: item.barcode,
     itemName: item.productName || item.name,
     requiredQuantity: item.quantity,
-    onScanSuccess: (scannedBarcode, quantity) => {
+    onScanSuccess: async (scannedBarcode, quantity) => {
+      try {
+        // Persist to backend first to survive refresh/polling
+        await persistItemScan(
+          currentOrderId,
+          scannedBarcode,
+          quantity,
+          new Date().toISOString(),
+          item.id // include itemId for backends that prefer matching by id
+        );
+      } catch (e) {
+        // Non-fatal: fall back to local state so user can proceed, we'll reconcile on next sync
+        console.warn('⚠️ Persist scan failed, applying local state only:', e?.message);
+      }
+      // Update local state so UI is instant
       updateItemStatus(currentOrderId, item.id, ITEM_STATUS.SCANNED, new Date().toISOString(), quantity);
       // Check if all items are completed after this scan
       setTimeout(checkOrderCompletion, 100);

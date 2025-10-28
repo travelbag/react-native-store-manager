@@ -266,6 +266,75 @@ export function OrdersProvider({ children }) {
   const [demoInterval, setDemoInterval] = React.useState(null);
   const [syncInterval, setSyncInterval] = React.useState(null);
 
+  // Normalize a raw order from backend into app shape and apply item scanned mapping
+  const normalizeOrder = React.useCallback((orderRaw) => {
+    if (!orderRaw) return null;
+    const orderId = orderRaw.orderId ?? orderRaw.id;
+    // Parse items from array or JSON string
+    let rawItems = [];
+    if (Array.isArray(orderRaw.items)) {
+      rawItems = orderRaw.items;
+    } else if (typeof orderRaw.items === 'string') {
+      try {
+        rawItems = JSON.parse(orderRaw.items);
+      } catch {
+        rawItems = [];
+      }
+    } else if (Array.isArray(orderRaw.ordered_items)) {
+      rawItems = orderRaw.ordered_items;
+    } else if (typeof orderRaw.ordered_items === 'string') {
+      try {
+        rawItems = JSON.parse(orderRaw.ordered_items);
+      } catch {
+        rawItems = [];
+      }
+    }
+
+    const items = rawItems
+      .filter(Boolean)
+      .map((item, idx) => {
+        const scanned = Boolean(item.scanned || item.status === ITEM_STATUS.SCANNED || item.status === 'scanned');
+        const pickedQuantity = item.pickedQuantity ?? (scanned ? (item.quantity ?? 1) : undefined);
+        return {
+          id: item.id ?? `${orderId}_item_${idx}`,
+          name: item.productName ?? item.name ?? '',
+          price: parseFloat(item.price) || 0,
+          quantity: item.quantity ?? 1,
+          barcode: item.barcode ?? '',
+          image: item.image ?? '',
+          category: item.type ?? item.category ?? '',
+          rack: item.rack ?? {},
+          status: scanned ? ITEM_STATUS.SCANNED : (item.status && Object.values(ITEM_STATUS).includes(item.status) ? item.status : ITEM_STATUS.PENDING),
+          weight: item.weight ?? '',
+          mrp: item.mrp ?? '',
+          scannedAt: item.scannedAt ?? null,
+          pickedQuantity,
+        };
+      });
+
+    return {
+      id: orderId,
+      orderId,
+      customerName: orderRaw.customerName ?? orderRaw.customer_name ?? '',
+      items,
+      total: orderRaw.totalPrice ?? orderRaw.total ?? orderRaw.total_amount ?? '0.00',
+      status: orderRaw.orderStatus ?? orderRaw.status ?? ORDER_STATUS.PENDING,
+      orderStatus: orderRaw.orderStatus ?? orderRaw.status ?? ORDER_STATUS.PENDING,
+      timestamp: orderRaw.orderDate ?? orderRaw.created_at ?? new Date().toISOString(),
+      deliveryAddress: orderRaw.deliveryAddress ?? orderRaw.delivery_address ?? '',
+      phoneNumber: orderRaw.phoneNumber ?? orderRaw.customer_phone ?? '',
+      estimatedTime: orderRaw.estimatedTime ?? 30,
+      orderType: orderRaw.orderType ?? 'grocery',
+      deliveryType: orderRaw.deliveryType ?? 'home_delivery',
+      specialInstructions: orderRaw.specialInstructions ?? '',
+      storeId: orderRaw.storeId ?? orderRaw.store_id ?? '',
+      deliveryLatitude: orderRaw.deliveryLatitude ?? '',
+      deliveryLongitude: orderRaw.deliveryLongitude ?? '',
+      paymentType: orderRaw.paymentType ?? '',
+      driverId: orderRaw.driverId ?? null,
+    };
+  }, []);
+
   useEffect(() => {
     console.log('🛒 OrdersContext initialized', isAuthenticated, manager);
     if (isAuthenticated && manager) {
@@ -303,9 +372,11 @@ const fetchOrdersFromDB = async (status = null) => {
   try {
     const response = await fetch(url, { headers: getAuthHeaders() });
     const data = await response.json();
-    // Map DB fields to your frontend order format if needed
-    //console.log('📦 Orders fetched from DB:', data.orders);
-    return data.orders || [];
+    const rawOrders = data.orders || data || [];
+    const normalized = Array.isArray(rawOrders)
+      ? rawOrders.map(normalizeOrder).filter(Boolean)
+      : [];
+    return normalized;
   } catch (error) {
     console.error('❌ Error fetching orders from DB:', error);
     return [];
@@ -490,37 +561,7 @@ const fetchOrdersFromDB = async (status = null) => {
         }
 
         // Map backend fields to frontend order format
-        const orderData = {
-          id: orderRaw.orderId,
-          customerName: orderRaw.customerName,
-          items: items.map((item, idx) => ({
-            id: `${orderRaw.orderId}_item_${idx}`,
-            name: item.productName || item.name || '',
-            price: parseFloat(item.price) || 0,
-            quantity: item.quantity || 1,
-            barcode: item.barcode || '',
-            image: item.image || '',
-            category: item.type || '',
-            rack: {},
-            status: ITEM_STATUS.PENDING,
-            weight: item.weight || '',
-            mrp: item.mrp || '',
-          })),
-          total: orderRaw.totalPrice || '0.00',
-          status: orderRaw.orderStatus || ORDER_STATUS.PENDING,
-          timestamp: orderRaw.orderDate || new Date().toISOString(),
-          deliveryAddress: orderRaw.deliveryAddress || '',
-          phoneNumber: orderRaw.phoneNumber || '',
-          estimatedTime: 30, // Placeholder
-          orderType: 'grocery',
-          deliveryType: 'home_delivery',
-          specialInstructions: '',
-          storeId: orderRaw.storeId || '',
-          deliveryLatitude: orderRaw.deliveryLatitude || '',
-          deliveryLongitude: orderRaw.deliveryLongitude || '',
-          paymentType: orderRaw.paymentType || '',
-          driverId: orderRaw.driverId || null,
-        };
+        const orderData = normalizeOrder(orderRaw);
         console.log('📦 Order details mapped:', orderData);
         return orderData;
       } else {
@@ -601,6 +642,34 @@ const fetchOrdersFromDB = async (status = null) => {
       type: ACTIONS.UPDATE_ITEM_STATUS, 
       payload: { orderId, itemId, status, scannedAt, pickedQuantity } 
     });
+  };
+
+  // Persist scanned state of an item in backend DB (ordered_items JSON)
+  // Persist scanned state of an item in backend DB (ordered_items JSON)
+  // Accepts optional itemId for backends that prefer id instead of barcode matching
+  const persistItemScan = async (orderId, barcode, pickedQuantity = 1, scannedAt = new Date().toISOString(), itemId = null) => {
+    try {
+      const endpoint = `${API_CONFIG.ENDPOINTS.UPDATE_ITEM_SCAN}/${orderId}/items/${encodeURIComponent(barcode)}/scan`;
+      const res = await fetch(buildApiUrl(endpoint), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ scanned: true, pickedQuantity, scannedAt, itemId }),
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(`API ${res.status}: ${t}`);
+      }
+      // Optionally return updated order from backend if provided
+      let updated = null;
+      try {
+        const json = await res.json();
+        if (json?.order) updated = normalizeOrder(json.order);
+      } catch {}
+      return updated;
+    } catch (e) {
+      console.error('❌ Failed to persist item scan:', e.message);
+      throw e;
+    }
   };
 
   const scanBarcode = (orderId, itemId, scannedBarcode, pickedQuantity = 1) => {
@@ -692,6 +761,7 @@ const fetchOrdersFromDB = async (status = null) => {
     rejectOrder,
     scanBarcode,
     markItemUnavailable,
+  persistItemScan,
     markOrderReady,
     completeOrder,
     removeOrder,
