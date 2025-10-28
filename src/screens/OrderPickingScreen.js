@@ -307,7 +307,7 @@ const checkOrderCompletion = () => {
           <Ionicons name="arrow-back" size={24} color="#007AFF" />
         </TouchableOpacity>
         <View style={styles.headerInfo}>
-          <Text style={styles.headerTitle}>Order #{order.id}</Text>
+          <Text style={styles.headerTitle}>Order #{order.id || order.orderId}</Text>
           <Text style={styles.headerSubtitle}>{order.customerName}</Text>
           <Text style={styles.headerStatus}>{getOrderStatusText(order.status ?? order.orderStatus)}</Text>
         </View>
@@ -348,8 +348,9 @@ const checkOrderCompletion = () => {
       style={styles.markReadyButton}
       onPress={async () => {
         try {
-          console.log('Marking order ready:', order.id);
-          await markOrderReady(order.id);
+          const readyOrderId = order.id || order.orderId || orderId;
+          console.log('Marking order ready with ID:', readyOrderId);
+          await markOrderReady(readyOrderId);
           Alert.alert(
             'Order Ready! ✅',
             'This order has been marked as READY and is now available in the Ready tab.',

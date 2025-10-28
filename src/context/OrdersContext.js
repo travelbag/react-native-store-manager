@@ -601,6 +601,10 @@ const fetchOrdersFromDB = async (status = null) => {
   };
 
    const markOrderReady = async (orderId) => {
+    if (!orderId) {
+      console.error('❌ markOrderReady called without a valid orderId');
+      throw new Error('Order ID is required to mark as READY');
+    }
     console.log('✅ Marking order as READY (pessimistic update), ID:', orderId);
     
     try {
