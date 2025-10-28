@@ -2,9 +2,9 @@
 export const API_CONFIG = {
   // Replace with your actual backend URL
   //BASE_URL: 'http://10.0.2.2:8080/api',
-  BASE_URL: 'http://192.168.1.211:8080/api',
+  //BASE_URL: 'http://192.168.1.211:8080/api', // dot it
     //BASE_URL: 'http://localhost:8080/api',
-  //BASE_URL: 'https://ubgukf7hdu.us-east-1.awsapprunner.com/api',
+  BASE_URL: 'https://ubgukf7hdu.us-east-1.awsapprunner.com/api',
 
   
   // Store Manager Configuration - will be set from logged in user
@@ -21,7 +21,7 @@ export const API_CONFIG = {
     ORDER_DETAILS: '/orders', // /{orderId}
     UPDATE_ORDER_STATUS: '/orders', // /{orderId}/status
     // Persist item-level scan state
-    UPDATE_ITEM_SCAN: 'api/orders', // /{orderId}/items/{barcode}/scan
+    UPDATE_ITEM_SCAN: '/orders', // /{orderId}/items/{barcode}/scan
   },
   
   // Demo mode - set to false in production

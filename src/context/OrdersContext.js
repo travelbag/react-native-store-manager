@@ -650,6 +650,8 @@ const fetchOrdersFromDB = async (status = null) => {
   const persistItemScan = async (orderId, barcode, pickedQuantity = 1, scannedAt = new Date().toISOString(), itemId = null) => {
     try {
       const endpoint = `${API_CONFIG.ENDPOINTS.UPDATE_ITEM_SCAN}/${orderId}/items/${encodeURIComponent(barcode)}/scan`;
+      
+      console.log('🔄 Persisting item scan to backend:', { orderId, barcode, pickedQuantity, scannedAt, itemId });
       const res = await fetch(buildApiUrl(endpoint), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },

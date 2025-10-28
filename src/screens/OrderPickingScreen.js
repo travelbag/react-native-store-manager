@@ -24,7 +24,7 @@ const OrderPickingScreen = ({ route, navigation }) => {
   const items = React.useMemo(() => {
     if (!order?.items) return [];
     const itemsArray = Array.isArray(order.items) ? order.items : JSON.parse(order.items);
-    console.log('📋 OrderPickingScreen - Items updated:', itemsArray.map(item => ({ id: item.id, name: item.name, status: item.status })));
+   // console.log('📋 OrderPickingScreen - Items updated:', itemsArray.map(item => ({ id: item.id, name: item.name, status: item.status })));
     return itemsArray;
   }, [order?.items]);
 
@@ -36,15 +36,15 @@ const OrderPickingScreen = ({ route, navigation }) => {
     const scannedItems = safeItems.filter(item => item.status === ITEM_STATUS.SCANNED).length;
     const unavailableItems = safeItems.filter(item => item.status === ITEM_STATUS.UNAVAILABLE).length;
     const newAllPickedOrUnavailable = scannedItems + unavailableItems === safeItems.length && safeItems.length > 0;
-console.log('safeItems', safeItems);
-  console.log('scannedItems',scannedItems);
-  console.log('unavailableItems',unavailableItems);
-    console.log('📊 OrderPickingScreen - Status check:', {
-      scannedItems,
-      unavailableItems,
-      totalItems: safeItems.length,
-      allPickedOrUnavailable: newAllPickedOrUnavailable
-    });
+// console.log('safeItems', safeItems);
+//   console.log('scannedItems',scannedItems);
+//   console.log('unavailableItems',unavailableItems);
+//     console.log('📊 OrderPickingScreen - Status check:', {
+//       scannedItems,
+//       unavailableItems,
+//       totalItems: safeItems.length,
+//       allPickedOrUnavailable: newAllPickedOrUnavailable
+//     });
 
     setAllPickedOrUnavailable(newAllPickedOrUnavailable);
   }, [safeItems]);
