@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -14,11 +14,20 @@ import { useOrders, ORDER_STATUS } from '../context/OrdersContext';
 import { useAuth } from '../context/AuthContext';
 import OrderCard from '../components/OrderCard';
 
-const OrdersScreen = () => {
+const OrdersScreen = ({ route }) => {
   const { orders, loading } = useOrders();
   const { manager, logout } = useAuth();
   const [selectedFilter, setSelectedFilter] = useState(ORDER_STATUS.PENDING);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Handle navigation parameter to set the selected tab
+  React.useEffect(() => {
+    if (route?.params?.selectedTab) {
+      setSelectedFilter(route.params.selectedTab);
+      // Clear the parameter to prevent it from persisting
+      route.params.selectedTab = undefined;
+    }
+  }, [route?.params?.selectedTab]);
 
   const safeOrders = Array.isArray(orders) ? orders : [];
   // Normalize status for filtering
@@ -28,27 +37,33 @@ const OrdersScreen = () => {
   };
 
   const filters = [
-    { key: ORDER_STATUS.PENDING, label: 'Pending', count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === normalizeStatus(ORDER_STATUS.PENDING)).length },
-    { key: ORDER_STATUS.ACCEPTED, label: 'Accepted', count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === normalizeStatus(ORDER_STATUS.ACCEPTED)).length },
-    { key: ORDER_STATUS.READY, label: 'Ready', count: safeOrders.filter(o => {
-      const s = normalizeStatus(o.status ?? o.orderStatus);
-      return s === normalizeStatus(ORDER_STATUS.READY) || s === normalizeStatus(ORDER_STATUS.PICKING);
-    }).length },
-    { key: ORDER_STATUS.ASSIGNED, label: 'Assigned', count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === normalizeStatus(ORDER_STATUS.ASSIGNED)).length },
-    { key: ORDER_STATUS.REJECTED, label: 'Cancelled', count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === normalizeStatus(ORDER_STATUS.REJECTED)).length },
+    { 
+      key: ORDER_STATUS.PENDING, 
+      label: 'Pending', 
+      count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === 'pending').length 
+    },
+    { 
+      key: ORDER_STATUS.ACCEPTED, 
+      label: 'Accepted', 
+      count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === 'accepted').length 
+    },
+    { 
+      key: ORDER_STATUS.READY, 
+      label: 'Ready', 
+      count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === 'ready').length 
+    },
+    { 
+      key: ORDER_STATUS.ASSIGNED, 
+      label: 'Assigned', 
+      count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === 'assigned').length 
+    },
   ];
 
-  let filteredOrders = [];
-  if (selectedFilter === ORDER_STATUS.READY) {
-    filteredOrders = safeOrders.filter(order => {
-      const s = normalizeStatus(order.status ?? order.orderStatus);
-      return s === normalizeStatus(ORDER_STATUS.READY) || s === normalizeStatus(ORDER_STATUS.PICKING);
-    });
-  } else if (selectedFilter === ORDER_STATUS.ASSIGNED) {
-    filteredOrders = safeOrders.filter(order => normalizeStatus(order.status ?? order.orderStatus) === normalizeStatus(ORDER_STATUS.ASSIGNED));
-  } else {
-    filteredOrders = safeOrders.filter(order => normalizeStatus(order.status ?? order.orderStatus) === normalizeStatus(selectedFilter));
-  }
+  // Simple filtering - each order appears in exactly one tab
+  const filteredOrders = safeOrders.filter(order => {
+    const orderStatus = normalizeStatus(order.status ?? order.orderStatus);
+    return orderStatus === normalizeStatus(selectedFilter);
+  });
 
     //console.log('Filtered Orders:', filteredOrders);
   const onRefresh = () => {

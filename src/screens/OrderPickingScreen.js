@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,34 @@ import { Ionicons } from '@expo/vector-icons';
 import { useOrders, ITEM_STATUS, ORDER_STATUS } from '../context/OrdersContext';
 
 const OrderPickingScreen = ({ route, navigation }) => {
+  const [allPickedOrUnavailable, setAllPickedOrUnavailable] = useState(false);
+  const { orderId } = route.params;
+  const { orders, updateItemStatus, scanBarcode, markItemUnavailable, updateOrderStatus, markOrderReady } = useOrders();
+
+  // Find order by id or orderId for compatibility
+  const order = orders.find(o => o.id === orderId || o.orderId === orderId);
+
+  // Get items array safely
+  const items = React.useMemo(() => {
+    if (!order?.items) return [];
+    return Array.isArray(order.items) ? order.items : JSON.parse(order.items);
+  }, [order?.items]);
+
+  // Check if all items are picked or unavailable
+  useEffect(() => {
+    const scannedItems = items.filter(item => item.status === ITEM_STATUS.SCANNED).length;
+    const unavailableItems = items.filter(item => item.status === ITEM_STATUS.UNAVAILABLE).length;
+    setAllPickedOrUnavailable(scannedItems + unavailableItems === items.length && items.length > 0);
+  }, [items]);
+
+  // Check for scan success from navigation params
+  useEffect(() => {
+    if (route.params?.scanSuccess) {
+      // Clear the param to prevent showing again (no need for additional alert)
+      navigation.setParams({ scanSuccess: undefined });
+    }
+  }, [route.params?.scanSuccess]);
+
   // Helper to normalize status
   const normalizeStatus = (status) => {
     if (!status) return '';
@@ -40,11 +68,6 @@ const OrderPickingScreen = ({ route, navigation }) => {
         return 'Pending'; // fallback to Pending if unknown
     }
   };
-  const { orderId } = route.params;
-  const { orders, updateItemStatus, scanBarcode, markItemUnavailable, updateOrderStatus } = useOrders();
-
-  // Find order by id or orderId for compatibility
-  const order = orders.find(o => o.id === orderId || o.orderId === orderId);
 
   if (!order) {
     return (
@@ -87,9 +110,10 @@ const OrderPickingScreen = ({ route, navigation }) => {
 
   const handleLocateItem = (item) => {
     updateItemStatus(orderId, item.id, ITEM_STATUS.LOCATED);
+    const rack = item.rack || {};
     Alert.alert(
       'Navigate to Item',
-      `📍 ${item.name}\n\n🏪 Location: ${item.rack.location}\n📍 Aisle: ${item.rack.aisle}\n📝 Description: ${item.rack.description}`,
+      `📍 ${item.name}\n\n🏪 Location: ${rack.location}\n📍 Aisle: ${rack.aisle}\n📝 Description: ${rack.description}`,
       [
         { text: 'Got it!', style: 'default' },
         { 
@@ -101,21 +125,7 @@ const OrderPickingScreen = ({ route, navigation }) => {
     );
   };
 
-  const handleScanItem = (item) => {
-    navigation.navigate('BarcodeScanner', {
-      orderId,
-      itemId: item.id,
-      expectedBarcode: item.barcode,
-      itemName: item.name,
-      requiredQuantity: item.quantity,
-      onScanSuccess: (scannedBarcode, pickedQuantity) => {
-        const result = scanBarcode(orderId, item.id, scannedBarcode, pickedQuantity);
-        if (result.success) {
-          checkOrderCompletion();
-        }
-      },
-    });
-  };
+
 
   const handleMarkUnavailable = (item) => {
     Alert.alert(
@@ -135,38 +145,34 @@ const OrderPickingScreen = ({ route, navigation }) => {
     );
   };
 
-  const checkOrderCompletion = () => {
-    const allItemsProcessed = order.items.every(item => 
-      item.status === ITEM_STATUS.SCANNED || item.status === ITEM_STATUS.UNAVAILABLE
-    );
+const handleScanItem = (item) => {
+  navigation.navigate('BarcodeScanner', {
+    itemId: item.id,
+    expectedBarcode: item.barcode,
+    itemName: item.productName,
+    requiredQuantity: item.quantity,
+    onScanSuccess: (scannedBarcode, quantity) => {
+      updateItemStatus(order.id, item.id, ITEM_STATUS.SCANNED, new Date(), quantity);
+    },
+  });
+};
 
-    if (allItemsProcessed) {
-      // Update order status to READY automatically
-      if (typeof markOrderReady === 'function') {
-        markOrderReady(orderId);
-      } else {
-        updateOrderStatus(orderId, ORDER_STATUS.READY);
-      }
-      setTimeout(() => {
-        Alert.alert(
-          'Order Picking Complete!',
-          'All items have been picked or marked unavailable. The order is now READY for delivery or pickup.',
-          [
-            { 
-              text: 'OK', 
-              onPress: () => {
-                if (navigation.canGoBack && navigation.canGoBack()) {
-                  navigation.goBack();
-                } else {
-                  navigation.navigate('Orders'); // Change 'Orders' to your main orders screen name if different
-                }
-              }
-            }
-          ]
-        );
-      }, 350); // Delay to allow navigation stack to settle
-    }
-  };
+
+const checkOrderCompletion = () => {
+  const allItemsProcessed = order.items.every(
+    item =>
+      item.status === ITEM_STATUS.SCANNED ||
+      item.status === ITEM_STATUS.UNAVAILABLE
+  );
+
+  if (allItemsProcessed) {
+    Alert.alert(
+      'All Items Processed',
+      'All items have been picked or marked unavailable. You can now mark this order as READY.',
+      [{ text: 'OK' }]
+    );
+  }
+};
 
   const renderItemCard = ({ item }) => (
     <View style={styles.itemCard}>
@@ -192,10 +198,10 @@ const OrderPickingScreen = ({ route, navigation }) => {
       <View style={styles.rackInfo}>
         <View style={styles.rackHeader}>
           <Ionicons name="location" size={16} color="#007AFF" />
-          <Text style={styles.rackTitle}>Location: {item.rack.location}</Text>
+<Text style={styles.rackTitle}>Location: {item.rack?.location || 'N/A'}</Text>
         </View>
-        <Text style={styles.rackAisle}>{item.rack.aisle}</Text>
-        <Text style={styles.rackDescription}>{item.rack.description}</Text>
+        <Text style={styles.rackAisle}>{item.rack?.aisle || 'N/A'}</Text>
+<Text style={styles.rackDescription}>{item.rack?.description || 'N/A'}</Text>
       </View>
 
       <View style={styles.itemActions}>
@@ -209,7 +215,7 @@ const OrderPickingScreen = ({ route, navigation }) => {
           </TouchableOpacity>
         )}
 
-        {(item.status === ITEM_STATUS.LOCATED || item.status === ITEM_STATUS.PENDING) && (
+        {/* {(item.status === ITEM_STATUS.LOCATED || item.status === ITEM_STATUS.PENDING) && ( */}
           <TouchableOpacity
             style={styles.scanButton}
             onPress={() => handleScanItem(item)}
@@ -217,7 +223,7 @@ const OrderPickingScreen = ({ route, navigation }) => {
             <Ionicons name="scan" size={16} color="#FFFFFF" />
             <Text style={styles.buttonText}>Scan</Text>
           </TouchableOpacity>
-        )}
+        {/* )} */}
 
         {item.status !== ITEM_STATUS.SCANNED && item.status !== ITEM_STATUS.UNAVAILABLE && (
           <TouchableOpacity
@@ -233,7 +239,19 @@ const OrderPickingScreen = ({ route, navigation }) => {
           <View style={styles.completedIndicator}>
             <Ionicons name="checkmark-circle" size={20} color="#34C759" />
             <Text style={styles.completedText}>
-              Picked {item.pickedQuantity || item.quantity}/{item.quantity}
+              ✅ Picked {item.pickedQuantity || item.quantity}/{item.quantity}
+            </Text>
+            <Text style={styles.scannedTimeText}>
+              {item.scannedAt ? new Date(item.scannedAt).toLocaleTimeString() : 'Just scanned'}
+            </Text>
+          </View>
+        )}
+
+        {item.status === ITEM_STATUS.UNAVAILABLE && (
+          <View style={styles.unavailableIndicator}>
+            <Ionicons name="close-circle" size={20} color="#FF3B30" />
+            <Text style={styles.unavailableText}>
+              ❌ Not Available
             </Text>
           </View>
         )}
@@ -241,11 +259,18 @@ const OrderPickingScreen = ({ route, navigation }) => {
     </View>
   );
 
-  const scannedItems = order.items.filter(item => item.status === ITEM_STATUS.SCANNED).length;
-  const unavailableItems = order.items.filter(item => item.status === ITEM_STATUS.UNAVAILABLE).length;
-  const totalItems = order.items.length;
+  if (!order) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <Text style={styles.errorText}>Order not found</Text>
+      </SafeAreaView>
+    );
+  }
 
-  const allPickedOrUnavailable = scannedItems + unavailableItems === totalItems && totalItems > 0;
+  const scannedItems = items.filter(item => item.status === ITEM_STATUS.SCANNED).length;
+  const unavailableItems = items.filter(item => item.status === ITEM_STATUS.UNAVAILABLE).length;
+  const totalItems = items.length;
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
@@ -273,35 +298,62 @@ const OrderPickingScreen = ({ route, navigation }) => {
         />
       </View>
 
-      <FlatList
-        data={order.items}
-        renderItem={renderItemCard}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.listContent}
-        showsVerticalScrollIndicator={false}
-      />
+<FlatList
+  data={items.filter(Boolean)}
+  renderItem={renderItemCard}
+  keyExtractor={(item, index) => (item?.id ?? index).toString()}
+/>
 
-      {allPickedOrUnavailable && (order.status !== ORDER_STATUS.READY && order.orderStatus !== ORDER_STATUS.READY) && (
-        <View style={{ padding: 16 }}>
-          <TouchableOpacity
-            style={{
-              backgroundColor: '#34C759',
-              paddingVertical: 16,
-              borderRadius: 8,
-              alignItems: 'center',
-              marginTop: 8,
-            }}
-            onPress={async () => {
-              if (typeof markOrderReady === 'function') {
-                await markOrderReady(order.id);
+
+
+{allPickedOrUnavailable && 
+ (order.status !== ORDER_STATUS.READY && order.orderStatus !== ORDER_STATUS.READY) && (
+  <View style={styles.readyButtonContainer}>
+    <View style={styles.readyMessageContainer}>
+      <Ionicons name="checkmark-circle" size={24} color="#34C759" />
+      <Text style={styles.readyMessageText}>
+        All items processed! Ready to mark order as complete.
+      </Text>
+    </View>
+    <TouchableOpacity
+      style={styles.markReadyButton}
+      onPress={async () => {
+        try {
+          console.log('Marking order ready:', order.id);
+          await markOrderReady(order.id);
+          Alert.alert(
+            'Order Ready! ✅',
+            'This order has been marked as READY and is now available in the Ready tab.',
+            [
+              {
+                text: 'OK',
+                onPress: () => {
+                  // Navigate to Orders screen with Ready tab selected
+                  navigation.navigate('OrdersList', { 
+                    selectedTab: ORDER_STATUS.READY 
+                  });
+                }
               }
-              navigation.goBack();
-            }}
-          >
-            <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>Mark Order Ready</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+            ]
+          );
+        } catch (error) {
+          console.error('Error marking order ready:', error);
+          Alert.alert(
+            'Error',
+            'Failed to mark order as ready. Please try again.',
+            [{ text: 'OK' }]
+          );
+        }
+      }}
+    >
+      <Ionicons name="flag" size={20} color="#FFFFFF" />
+      <Text style={styles.markReadyButtonText}>
+        Mark Order Ready
+      </Text>
+    </TouchableOpacity>
+  </View>
+)}
+
     </SafeAreaView>
   );
 };
@@ -483,9 +535,33 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
+    backgroundColor: '#E8F5E8',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
   },
   completedText: {
     color: '#34C759',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  scannedTimeText: {
+    color: '#34C759',
+    fontSize: 12,
+    marginLeft: 8,
+    fontStyle: 'italic',
+  },
+  unavailableIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FFE8E8',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  unavailableText: {
+    color: '#FF3B30',
     fontSize: 14,
     fontWeight: '600',
   },
@@ -494,6 +570,45 @@ const styles = StyleSheet.create({
     color: '#FF3B30',
     textAlign: 'center',
     marginTop: 50,
+  },
+  readyButtonContainer: {
+    padding: 16,
+    backgroundColor: '#F8F9FA',
+    borderTopWidth: 1,
+    borderTopColor: '#E5E5E5',
+  },
+  readyMessageContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+    paddingHorizontal: 8,
+  },
+  readyMessageText: {
+    fontSize: 16,
+    color: '#333333',
+    fontWeight: '600',
+    marginLeft: 8,
+    flex: 1,
+  },
+  markReadyButton: {
+    backgroundColor: '#34C759',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+    gap: 8,
+  },
+  markReadyButtonText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: 'bold',
   },
 });
 

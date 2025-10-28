@@ -7,16 +7,14 @@ import { useAuth } from './AuthContext';
 
 const OrdersContext = createContext();
 
-// Order statuses
+// Order statuses - simplified flow
 export const ORDER_STATUS = {
   PENDING: 'pending',
   ACCEPTED: 'accepted',
-  PICKING: 'picked', // New status for item picking
-  PREPARING: 'preparing',
   READY: 'ready',
+  ASSIGNED: 'assigned',
   COMPLETED: 'completed',
   REJECTED: 'rejected',
-  ASSIGNED: 'assigned',
 };
 
 // Item statuses for tracking individual product pickup
@@ -78,39 +76,32 @@ function ordersReducer(state, action) {
           return order;
         }),
       };
-    
-    case ACTIONS.UPDATE_ITEM_STATUS:
+case ACTIONS.UPDATE_ITEM_STATUS: {
+      const { orderId, itemId, status, scannedAt, pickedQuantity } = action.payload;
+
       return {
         ...state,
-        orders: state.orders.map(order => {
-          if (order.id === action.payload.orderId) {
-            let items = [];
-            if (Array.isArray(order.items)) {
-              items = order.items;
-            } else if (typeof order.items === 'string') {
-              try {
-                items = JSON.parse(order.items);
-              } catch {
-                items = [];
+        orders: state.orders.map(order =>
+          order.id === orderId
+            ? {
+                ...order,
+                items: Array.isArray(order.items)
+                  ? order.items.map(item =>
+                      item.id === itemId
+                        ? {
+                            ...item,
+                            status,
+                            scannedAt: scannedAt || item.scannedAt,
+                            pickedQuantity: pickedQuantity || item.pickedQuantity,
+                          }
+                        : item
+                    )
+                  : [],
               }
-            }
-            return {
-              ...order,
-              items: items.map(item =>
-                item.id === action.payload.itemId
-                  ? { 
-                      ...item, 
-                      status: action.payload.status, 
-                      scannedAt: action.payload.scannedAt,
-                      pickedQuantity: action.payload.pickedQuantity
-                    }
-                  : item
-              )
-            };
-          }
-          return order;
-        }),
+            : order
+        ),
       };
+    }
     
     case ACTIONS.SET_ORDERS:
       // Remove duplicate orders by orderId (backend key)
@@ -276,7 +267,7 @@ const fetchOrdersFromDB = async (status = null) => {
     const response = await fetch(url, { headers: getAuthHeaders() });
     const data = await response.json();
     // Map DB fields to your frontend order format if needed
-    console.log('📦 Orders fetched from DB:', data.orders);
+    //console.log('📦 Orders fetched from DB:', data.orders);
     return data.orders || [];
   } catch (error) {
     console.error('❌ Error fetching orders from DB:', error);
@@ -552,30 +543,6 @@ const fetchOrdersFromDB = async (status = null) => {
     updateOrderStatus(orderId, ORDER_STATUS.REJECTED);
   };
 
-  const startPickingOrder = async (orderId) => {
-    console.log('🛒 Starting to pick order ID:', orderId);
-    try {
-      // Update backend
-      const response = await fetch(buildApiUrl(`/orders/${orderId}/status`), {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ status: ORDER_STATUS.PICKING }),
-      });
-      
-      console.log('🔄 Start picking API response status:', response.status);
-      
-      if (response.ok) {
-        console.log('✅ Order picking started successfully in backend');
-      } else {
-        console.error('❌ Failed to start picking in backend:', response.status);
-      }
-    } catch (error) {
-      console.error('❌ Error starting picking:', error);
-    }
-    // Update frontend state
-    updateOrderStatus(orderId, ORDER_STATUS.PICKING);
-  };
-
   const updateItemStatus = (orderId, itemId, status, scannedAt = null, pickedQuantity = null) => {
     dispatch({ 
       type: ACTIONS.UPDATE_ITEM_STATUS, 
@@ -611,12 +578,12 @@ const fetchOrdersFromDB = async (status = null) => {
     updateItemStatus(orderId, itemId, ITEM_STATUS.UNAVAILABLE);
   };
 
-  const startPreparingOrder = (orderId) => {
-    updateOrderStatus(orderId, ORDER_STATUS.PREPARING);
-  };
-
-  const markOrderReady = async (orderId) => {
+   const markOrderReady = async (orderId) => {
     console.log('✅ Marking order as READY, ID:', orderId);
+    
+    // First update the frontend state immediately for better UX
+    updateOrderStatus(orderId, ORDER_STATUS.READY);
+    
     try {
       // Update backend
       const response = await fetch(buildApiUrl(`/orders/${orderId}/status`), {
@@ -624,21 +591,33 @@ const fetchOrdersFromDB = async (status = null) => {
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ status: ORDER_STATUS.READY }),
       });
+      
       console.log('🔄 Mark ready API response status:', response.status);
+      
       if (response.ok) {
-        console.log('✅ Order marked as READY in backend');
-        // Refetch orders from backend to update UI
-        const orders = await fetchOrdersFromDB();
-        dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
+        console.log('✅ Order marked as READY in backend successfully');
+        const result = await response.json();
+        console.log('✅ Backend response:', result);
+        
+        // Optionally refetch orders from backend to ensure consistency
+        try {
+          const orders = await fetchOrdersFromDB();
+          dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
+          console.log('✅ Orders refreshed from backend after marking ready');
+        } catch (fetchError) {
+          console.warn('⚠️ Failed to refresh orders after marking ready:', fetchError);
+        }
       } else {
         console.error('❌ Failed to mark order as READY in backend:', response.status);
-        // Still update frontend state for now
-        updateOrderStatus(orderId, ORDER_STATUS.READY);
+        const errorText = await response.text();
+        console.error('❌ Error details:', errorText);
+        throw new Error(`Backend error: ${response.status} - ${errorText}`);
       }
     } catch (error) {
       console.error('❌ Error marking order as READY:', error);
-      // Still update frontend state for now
-      updateOrderStatus(orderId, ORDER_STATUS.READY);
+      // If backend update failed, still keep the frontend state updated
+      // but you might want to show an error message to the user
+      throw error;
     }
   };
 
@@ -659,10 +638,8 @@ const fetchOrdersFromDB = async (status = null) => {
     updateItemStatus,
     acceptOrder,
     rejectOrder,
-    startPickingOrder,
     scanBarcode,
     markItemUnavailable,
-    startPreparingOrder,
     markOrderReady,
     completeOrder,
     removeOrder,
