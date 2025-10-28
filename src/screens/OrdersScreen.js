@@ -13,9 +13,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { useOrders, ORDER_STATUS } from '../context/OrdersContext';
 import { useAuth } from '../context/AuthContext';
 import OrderCard from '../components/OrderCard';
+import { useFocusEffect } from '@react-navigation/native';
+import { AppState } from 'react-native';
 
 const OrdersScreen = ({ route }) => {
-  const { orders, loading } = useOrders();
+  const { orders, loading, refreshOrders } = useOrders();
   const { manager, logout } = useAuth();
   const [selectedFilter, setSelectedFilter] = useState(ORDER_STATUS.PENDING);
   const [refreshing, setRefreshing] = useState(false);
@@ -66,13 +68,32 @@ const OrdersScreen = ({ route }) => {
   });
 
     //console.log('Filtered Orders:', filteredOrders);
-  const onRefresh = () => {
+  const onRefresh = async () => {
     setRefreshing(true);
-    // Simulate refresh
-    setTimeout(() => {
+    try {
+      await refreshOrders();
+    } finally {
       setRefreshing(false);
-    }, 1000);
+    }
   };
+
+  // Refresh whenever the screen gains focus for near-real-time sync across devices
+  useFocusEffect(
+    React.useCallback(() => {
+      refreshOrders();
+      return undefined;
+    }, [refreshOrders])
+  );
+
+  // Refresh when app returns to foreground (active)
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        refreshOrders();
+      }
+    });
+    return () => subscription.remove();
+  }, [refreshOrders]);
 
   const renderOrderItem = ({ item }) => (
     <OrderCard order={{

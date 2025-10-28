@@ -264,6 +264,7 @@ export function OrdersProvider({ children }) {
   const [state, dispatch] = useReducer(ordersReducer, initialState);
   const { isAuthenticated, manager, getAuthHeaders } = useAuth();
   const [demoInterval, setDemoInterval] = React.useState(null);
+  const [syncInterval, setSyncInterval] = React.useState(null);
 
   useEffect(() => {
     console.log('🛒 OrdersContext initialized', isAuthenticated, manager);
@@ -273,7 +274,21 @@ export function OrdersProvider({ children }) {
        // Fetch orders from DB after login
     fetchOrdersFromDB().then(orders => {
       dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
-    });initializeNotifications();
+    });
+    initializeNotifications();
+
+    // Start foreground polling to keep devices in sync
+    if (!syncInterval) {
+      const id = setInterval(async () => {
+        try {
+          const orders = await fetchOrdersFromDB();
+          dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
+        } catch (e) {
+          // ignore polling errors
+        }
+      }, 5000); // poll every 5s for faster cross-device sync
+      setSyncInterval(id);
+    }
     }
   }, [isAuthenticated, manager]);
 // Fetch orders from backend DB by storeId and optional status
@@ -296,6 +311,17 @@ const fetchOrdersFromDB = async (status = null) => {
     return [];
   }
 };
+  // Public refresh helper to manually re-fetch orders
+  const refreshOrders = async (status = null) => {
+    try {
+      const orders = await fetchOrdersFromDB(status);
+      dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
+      return orders;
+    } catch (e) {
+      console.warn('⚠️ Failed to refresh orders:', e);
+      return [];
+    }
+  };
   const initializeNotifications = async () => {
     try {
       console.log('🚀 Starting notification initialization...');
@@ -338,12 +364,17 @@ const fetchOrdersFromDB = async (status = null) => {
             console.log('🔍 Notification data:', data);
             if (data.type === 'grocery_order') {
               handleNewOrderNotification(data);
+            } else if (data.type === 'order_status_updated' || data.type === 'order_updated') {
+              // Sync with backend when other devices change status
+              refreshOrders();
             }
           },
           (response) => {
             const data = response.notification.request.content.data;
             if (data.type === 'grocery_order') {
               handleNewOrderNotification(data);
+            } else if (data.type === 'order_status_updated' || data.type === 'order_updated') {
+              refreshOrders();
             }
           }
         );
@@ -527,17 +558,17 @@ const fetchOrdersFromDB = async (status = null) => {
         console.log('✅ Order accepted successfully in backend');
         // Update frontend state
         updateOrderStatus(orderId, ORDER_STATUS.ACCEPTED);
+        // Fetch latest to reflect any concurrent changes
+        refreshOrders();
       } else {
         console.error('❌ Failed to accept order in backend:', response.status);
         const errorText = await response.text();
         console.error('❌ Error details:', errorText);
-        // Still update frontend for now, but log the error
-        updateOrderStatus(orderId, ORDER_STATUS.ACCEPTED);
+        // Don't mutate local state on failure to avoid divergence
       }
     } catch (error) {
       console.error('❌ Error accepting order:', error);
-      // Still update frontend for now, but log the error
-      updateOrderStatus(orderId, ORDER_STATUS.ACCEPTED);
+      // Avoid local state change on failure
     }
   };
 
@@ -654,6 +685,7 @@ const fetchOrdersFromDB = async (status = null) => {
     loading: state.loading,
     error: state.error,
     addOrder,
+    refreshOrders,
     updateOrderStatus,
     updateItemStatus,
     acceptOrder,
@@ -710,9 +742,15 @@ const fetchOrdersFromDB = async (status = null) => {
       if (demoInterval) {
         console.log('🛑 Clearing demo interval');
         clearInterval(demoInterval);
+        setDemoInterval(null);
+      }
+      if (syncInterval) {
+        console.log('🛑 Clearing sync interval');
+        clearInterval(syncInterval);
+        setSyncInterval(null);
       }
     };
-  }, [demoInterval]);
+  }, [demoInterval, syncInterval]);
 
   return (
     <OrdersContext.Provider value={value}>

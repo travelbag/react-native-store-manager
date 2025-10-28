@@ -14,7 +14,7 @@ import { useNavigation } from '@react-navigation/native';
 import { assignDriver } from '../services/DriverService';
 
 const OrderCard = ({ order }) => {
-  const { updateOrderStatus, acceptOrder, rejectOrder } = useOrders();
+  const { updateOrderStatus, acceptOrder, rejectOrder, refreshOrders } = useOrders();
   const navigation = useNavigation();
   const { manager } = useAuth();
 
@@ -100,6 +100,10 @@ const OrderCard = ({ order }) => {
     try {
       await assignDriver(orderId, storeId);
       updateOrderStatus(orderId, ORDER_STATUS.ASSIGNED);
+      // Pull fresh state from backend to reflect assigned driver across devices
+      if (typeof refreshOrders === 'function') {
+        refreshOrders();
+      }
       Alert.alert('Success', 'Driver assigned successfully!');
     } catch (error) {
       Alert.alert('Error', error.message || 'Failed to assign driver');
