@@ -85,6 +85,7 @@ const OrderCard = ({ order }) => {
   };
 
   const handleStartPicking = async () => {
+    console.log('OrderCard handleStartPicking',orderId);
     console.log('OrderCard handleStartPicking orderId:', orderId, 'order:', order);
     if (!orderId) {
       console.warn('OrderCard: Cannot start picking, orderId is missing!', order);

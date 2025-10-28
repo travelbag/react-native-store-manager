@@ -23,20 +23,42 @@ const OrderPickingScreen = ({ route, navigation }) => {
   // Get items array safely
   const items = React.useMemo(() => {
     if (!order?.items) return [];
-    return Array.isArray(order.items) ? order.items : JSON.parse(order.items);
+    const itemsArray = Array.isArray(order.items) ? order.items : JSON.parse(order.items);
+    console.log('📋 OrderPickingScreen - Items updated:', itemsArray.map(item => ({ id: item.id, name: item.name, status: item.status })));
+    return itemsArray;
   }, [order?.items]);
+
+  // Filter out any null/undefined entries to avoid crashes in counts and render
+  const safeItems = React.useMemo(() => (items || []).filter(Boolean), [items]);
 
   // Check if all items are picked or unavailable
   useEffect(() => {
-    const scannedItems = items.filter(item => item.status === ITEM_STATUS.SCANNED).length;
-    const unavailableItems = items.filter(item => item.status === ITEM_STATUS.UNAVAILABLE).length;
-    setAllPickedOrUnavailable(scannedItems + unavailableItems === items.length && items.length > 0);
-  }, [items]);
+    const scannedItems = safeItems.filter(item => item.status === ITEM_STATUS.SCANNED).length;
+    const unavailableItems = safeItems.filter(item => item.status === ITEM_STATUS.UNAVAILABLE).length;
+    const newAllPickedOrUnavailable = scannedItems + unavailableItems === safeItems.length && safeItems.length > 0;
+console.log('safeItems', safeItems);
+  console.log('scannedItems',scannedItems);
+  console.log('unavailableItems',unavailableItems);
+    console.log('📊 OrderPickingScreen - Status check:', {
+      scannedItems,
+      unavailableItems,
+      totalItems: safeItems.length,
+      allPickedOrUnavailable: newAllPickedOrUnavailable
+    });
+
+    setAllPickedOrUnavailable(newAllPickedOrUnavailable);
+  }, [safeItems]);
 
   // Check for scan success from navigation params
   useEffect(() => {
     if (route.params?.scanSuccess) {
-      // Clear the param to prevent showing again (no need for additional alert)
+      // Show a brief success message
+      Alert.alert(
+        'Scan Successful! ✅',
+        'Item has been marked as picked.',
+        [{ text: 'OK' }]
+      );
+      // Clear the param to prevent showing again
       navigation.setParams({ scanSuccess: undefined });
     }
   }, [route.params?.scanSuccess]);
@@ -138,7 +160,8 @@ const OrderPickingScreen = ({ route, navigation }) => {
           style: 'destructive',
           onPress: () => {
             markItemUnavailable(orderId, item.id);
-            checkOrderCompletion();
+            // Check if all items are completed after marking unavailable
+            setTimeout(checkOrderCompletion, 100);
           }
         },
       ]
@@ -146,28 +169,34 @@ const OrderPickingScreen = ({ route, navigation }) => {
   };
 
 const handleScanItem = (item) => {
+  // Be explicit about passing orderId so the scanner can navigate back reliably
+  const currentOrderId = order?.id || order?.orderId || orderId;
   navigation.navigate('BarcodeScanner', {
+    orderId: currentOrderId,
     itemId: item.id,
     expectedBarcode: item.barcode,
-    itemName: item.productName,
+    itemName: item.productName || item.name,
     requiredQuantity: item.quantity,
     onScanSuccess: (scannedBarcode, quantity) => {
-      updateItemStatus(order.id, item.id, ITEM_STATUS.SCANNED, new Date(), quantity);
+      updateItemStatus(currentOrderId, item.id, ITEM_STATUS.SCANNED, new Date().toISOString(), quantity);
+      // Check if all items are completed after this scan
+      setTimeout(checkOrderCompletion, 100);
     },
   });
 };
 
 
 const checkOrderCompletion = () => {
-  const allItemsProcessed = order.items.every(
+  // Use the safeItems array instead of raw items
+  const allItemsProcessed = safeItems.every(
     item =>
       item.status === ITEM_STATUS.SCANNED ||
       item.status === ITEM_STATUS.UNAVAILABLE
   );
 
-  if (allItemsProcessed) {
+  if (allItemsProcessed && safeItems.length > 0) {
     Alert.alert(
-      'All Items Processed',
+      'All Items Processed! ✅',
       'All items have been picked or marked unavailable. You can now mark this order as READY.',
       [{ text: 'OK' }]
     );
@@ -267,9 +296,9 @@ const checkOrderCompletion = () => {
     );
   }
 
-  const scannedItems = items.filter(item => item.status === ITEM_STATUS.SCANNED).length;
-  const unavailableItems = items.filter(item => item.status === ITEM_STATUS.UNAVAILABLE).length;
-  const totalItems = items.length;
+  const scannedItems = safeItems.filter(item => item.status === ITEM_STATUS.SCANNED).length;
+  const unavailableItems = safeItems.filter(item => item.status === ITEM_STATUS.UNAVAILABLE).length;
+  const totalItems = safeItems.length;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -293,13 +322,13 @@ const checkOrderCompletion = () => {
         <View 
           style={[
             styles.progressFill, 
-            { width: `${((scannedItems + unavailableItems) / totalItems) * 100}%` }
+            { width: `${totalItems > 0 ? (((scannedItems + unavailableItems) / totalItems) * 100) : 0}%` }
           ]} 
         />
       </View>
 
 <FlatList
-  data={items.filter(Boolean)}
+  data={safeItems}
   renderItem={renderItemCard}
   keyExtractor={(item, index) => (item?.id ?? index).toString()}
 />

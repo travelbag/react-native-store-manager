@@ -12,17 +12,18 @@ import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 
 const BarcodeScannerScreen = ({ route, navigation }) => {
+  const { orderId, itemId, expectedBarcode, itemName, requiredQuantity = 1 } = route.params;
+  const [scanned, setScanned] = useState(false);
+  const [pickedQuantity, setPickedQuantity] = useState(1);
+  const [showQuantitySelector, setShowQuantitySelector] = useState(false);
+  const cameraRef = useRef(null);
+
   // Reset scanner state when itemId changes (for multi-item scanning)
   useEffect(() => {
     setScanned(false);
     setPickedQuantity(1);
     setShowQuantitySelector(false);
   }, [itemId]);
-  const { orderId, itemId, expectedBarcode, itemName, requiredQuantity = 1 } = route.params;
-  const [scanned, setScanned] = useState(false);
-  const [pickedQuantity, setPickedQuantity] = useState(1);
-  const [showQuantitySelector, setShowQuantitySelector] = useState(false);
-  const cameraRef = useRef(null);
 
   // camera permissions
   const [permission, requestPermission] = useCameraPermissions();
@@ -34,34 +35,9 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
   }, [permission]);
 
   const handleBarCodeScanned = ({ type, data }) => {
-      console.log('Scanned type:', type, 'data:', data);
-
-    // Only process supported barcode types (ignore QR codes)
-    const supportedTypes = ['ean13', 'ean8', 'upc_a', 'upc_e', 'code39', 'code128'];
-    // Debug: Show type and typeof
-    console.log('Type:', type, 'typeof:', typeof type);
-    // Debug: Show supportedTypes array and typeof each
-    supportedTypes.forEach(t => {
-      console.log('Supported type:', t, 'typeof:', typeof t, 'Compare:', t === String(type));
-    });
-    // Debug: Show normalizedType and compare
-    const normalizedType = String(type).toLowerCase().trim();
-    console.log('Normalized type:', normalizedType);
-    supportedTypes.forEach(t => {
-      console.log('Compare normalized:', t, '===', normalizedType, t === normalizedType);
-    });
-    if (!supportedTypes.includes(normalizedType)) {
-      Alert.alert(
-        'Invalid Scan',
-        `Please scan a valid product barcode (not a QR code).\nType received: ${type}`,
-        [
-          { text: 'Try Again', onPress: () => setScanned(false) },
-          { text: 'Cancel', onPress: () => navigation.canGoBack && navigation.canGoBack() ? navigation.goBack() : null },
-        ]
-      );
-      return;
-    }
-
+    console.log('Scanned type:', type, 'data:', data);
+    // Accept all types here; we already constrain the camera's scanner settings.
+    // Different platforms return different type strings (e.g., org.iso.Code128), so avoid over-filtering.
     setScanned(true);
     Vibration.vibrate();
 
@@ -95,11 +71,17 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
               route.params.onScanSuccess(scannedData || expectedBarcode, quantity);
             }
             setTimeout(() => {
-            navigation.navigate({
-  name: 'OrderPicking',
-  params: { orderId, scanSuccess: true },
-  merge: true,
-});
+              if (orderId) {
+                navigation.navigate({
+                  name: 'OrderPicking',
+                  params: { orderId, scanSuccess: true },
+                  merge: true,
+                });
+              } else if (navigation.canGoBack && navigation.canGoBack()) {
+                navigation.goBack();
+              } else {
+                navigation.navigate('OrdersList');
+              }
             }, 200); // Delay navigation to allow alert to close
           },
         },

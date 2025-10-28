@@ -76,30 +76,52 @@ function ordersReducer(state, action) {
           return order;
         }),
       };
-case ACTIONS.UPDATE_ITEM_STATUS: {
+    case ACTIONS.UPDATE_ITEM_STATUS: {
       const { orderId, itemId, status, scannedAt, pickedQuantity } = action.payload;
+      
+      console.log('🔄 UPDATE_ITEM_STATUS:', { orderId, itemId, status, scannedAt, pickedQuantity });
 
       return {
         ...state,
-        orders: state.orders.map(order =>
-          order.id === orderId
-            ? {
-                ...order,
-                items: Array.isArray(order.items)
-                  ? order.items.map(item =>
-                      item.id === itemId
-                        ? {
-                            ...item,
-                            status,
-                            scannedAt: scannedAt || item.scannedAt,
-                            pickedQuantity: pickedQuantity || item.pickedQuantity,
-                          }
-                        : item
-                    )
-                  : [],
-              }
-            : order
-        ),
+        orders: state.orders.map(order => {
+          const matchesOrder = order.id === orderId || order.orderId === orderId;
+          if (!matchesOrder) return order;
+
+          console.log('✅ Found matching order:', order.id || order.orderId);
+
+          // Normalize items to an array first (handles stringified JSON from backend)
+          let normalizedItems = [];
+          if (Array.isArray(order.items)) {
+            normalizedItems = order.items;
+          } else if (typeof order.items === 'string') {
+            try {
+              const parsed = JSON.parse(order.items);
+              normalizedItems = Array.isArray(parsed) ? parsed : [];
+            } catch (e) {
+              console.warn('⚠️ Failed to parse order.items JSON during update; keeping empty array.', e);
+              normalizedItems = [];
+            }
+          }
+
+          const updatedItems = normalizedItems.map(item => {
+            if (item.id === itemId) {
+              console.log('✅ Updating item:', item.id, 'status:', status);
+              return {
+                ...item,
+                status,
+                scannedAt: (scannedAt ?? item.scannedAt),
+                pickedQuantity: (pickedQuantity ?? item.pickedQuantity),
+              };
+            }
+            return item;
+          });
+
+          return {
+            ...order,
+            // Ensure items remain an array after update
+            items: updatedItems,
+          };
+        }),
       };
     }
     
@@ -579,13 +601,10 @@ const fetchOrdersFromDB = async (status = null) => {
   };
 
    const markOrderReady = async (orderId) => {
-    console.log('✅ Marking order as READY, ID:', orderId);
-    
-    // First update the frontend state immediately for better UX
-    updateOrderStatus(orderId, ORDER_STATUS.READY);
+    console.log('✅ Marking order as READY (pessimistic update), ID:', orderId);
     
     try {
-      // Update backend
+      // 1) Update backend first
       const response = await fetch(buildApiUrl(`/orders/${orderId}/status`), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
@@ -594,29 +613,26 @@ const fetchOrdersFromDB = async (status = null) => {
       
       console.log('🔄 Mark ready API response status:', response.status);
       
-      if (response.ok) {
-        console.log('✅ Order marked as READY in backend successfully');
-        const result = await response.json();
-        console.log('✅ Backend response:', result);
-        
-        // Optionally refetch orders from backend to ensure consistency
-        try {
-          const orders = await fetchOrdersFromDB();
-          dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
-          console.log('✅ Orders refreshed from backend after marking ready');
-        } catch (fetchError) {
-          console.warn('⚠️ Failed to refresh orders after marking ready:', fetchError);
-        }
-      } else {
-        console.error('❌ Failed to mark order as READY in backend:', response.status);
+      if (!response.ok) {
         const errorText = await response.text();
-        console.error('❌ Error details:', errorText);
+        console.error('❌ Failed to mark order as READY in backend:', response.status, errorText);
         throw new Error(`Backend error: ${response.status} - ${errorText}`);
+      }
+
+      // 2) Backend succeeded — now update local state for this one order only
+      updateOrderStatus(orderId, ORDER_STATUS.READY);
+
+      // 3) Optionally refetch orders from backend to ensure consistency (non-blocking)
+      try {
+        const orders = await fetchOrdersFromDB();
+        dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
+        console.log('✅ Orders refreshed from backend after marking ready');
+      } catch (fetchError) {
+        console.warn('⚠️ Failed to refresh orders after marking ready:', fetchError);
       }
     } catch (error) {
       console.error('❌ Error marking order as READY:', error);
-      // If backend update failed, still keep the frontend state updated
-      // but you might want to show an error message to the user
+      // Do NOT mutate local order status on failure (avoid moving orders across tabs)
       throw error;
     }
   };
