@@ -115,9 +115,18 @@ const OrderCard = ({ order }) => {
     }
   };
 
+  const sanitizePhone = (raw) => {
+    const s = String(raw || '').trim();
+    if (!s) return '';
+    const hasPlus = s.startsWith('+');
+    const digits = s.replace(/[^0-9]/g, '');
+    return hasPlus ? `+${digits}` : digits;
+  };
+
   const handleCall = async (phone) => {
-    if (!phone) return;
-    const url = `tel:${phone}`;
+    const cleaned = sanitizePhone(phone);
+    if (!cleaned) return;
+    const url = `tel:${cleaned}`;
     try {
       const supported = await Linking.canOpenURL(url);
       if (supported) {
