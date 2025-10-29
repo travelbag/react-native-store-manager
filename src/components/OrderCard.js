@@ -73,7 +73,8 @@ const OrderCard = ({ order }) => {
       case 'assigned':
         return 'Assigned';
       case 'completed':
-        return 'Completed';
+      case 'delivered':
+        return 'Delivered';
       case 'rejected':
         return 'Rejected';
       default:
@@ -90,7 +91,7 @@ const OrderCard = ({ order }) => {
   };
 
   const handleStartPicking = async () => {
-    console.log('OrderCard handleStartPicking orderId:', orderId, 'order:', order);
+    //console.log('OrderCard handleStartPicking orderId:', orderId, 'order:', order);
     if (!orderId) {
       console.warn('OrderCard: Cannot start picking, orderId is missing!', order);
       Alert.alert('Error', 'Order ID is missing. Cannot start picking for this order.');
@@ -100,7 +101,7 @@ const OrderCard = ({ order }) => {
   };
 
   const handleAssignDriver = async () => {
-    console.log('Assigning driver for order:', orderId);
+   // console.log('Assigning driver for order:', orderId);
     const storeId = manager?.storeId || manager?.store_id || '';
     try {
       await assignDriver(orderId, storeId);
@@ -139,10 +140,13 @@ const OrderCard = ({ order }) => {
     }
   };
 
-  const formatTime = (timestamp) => {
-    if (!timestamp) return '';
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const formatDateTime = (ts) => {
+    if (!ts) return '';
+    const d = new Date(ts);
+    if (isNaN(d)) return '';
+    const datePart = d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: '2-digit' });
+    const timePart = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return `${datePart} ${timePart}`;
   };
 
   const renderActionButtons = () => {
@@ -191,7 +195,7 @@ const OrderCard = ({ order }) => {
         <View>
           <Text style={styles.orderId}>Order #{orderId}</Text>
           <Text style={styles.customerName}>{customerName}</Text>
-          <Text style={styles.time}>{formatTime(timestamp)}</Text>
+          <Text style={styles.time}>{formatDateTime(timestamp)}</Text>
         </View>
         <View style={styles.statusContainer}>
           <View style={[styles.statusBadge, { backgroundColor: getStatusColor(status) }]}>

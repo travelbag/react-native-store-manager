@@ -68,7 +68,8 @@ const OrderCard = ({ order }) => {
       case 'assigned':
         return 'Assigned';
       case 'completed':
-        return 'Completed';
+      case 'delivered':
+        return 'Delivered';
       case 'rejected':
         return 'Rejected';
       default:
@@ -85,8 +86,8 @@ const OrderCard = ({ order }) => {
   };
 
   const handleStartPicking = async () => {
-    console.log('OrderCard handleStartPicking',orderId);
-    console.log('OrderCard handleStartPicking orderId:', orderId, 'order:', order);
+   // console.log('OrderCard handleStartPicking',orderId);
+    //console.log('OrderCard handleStartPicking orderId:', orderId, 'order:', order);
     if (!orderId) {
       console.warn('OrderCard: Cannot start picking, orderId is missing!', order);
       Alert.alert('Error', 'Order ID is missing. Cannot start picking for this order.');
@@ -96,7 +97,7 @@ const OrderCard = ({ order }) => {
   };
 
   const handleAssignDriver = async () => {
-    console.log('Assigning driver for order:', orderId);
+    //console.log('Assigning driver for order:', orderId);
     const storeId = manager?.storeId || manager?.store_id || '';
     try {
       await assignDriver(orderId, storeId);

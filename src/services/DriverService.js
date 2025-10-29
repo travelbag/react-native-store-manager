@@ -16,9 +16,12 @@ export const assignDriver = async (orderId, storeId) => {
       const errorText = await response.text();
       throw new Error(`Failed to assign driver: ${errorText}`);
     }
-    console.log('Driver assigned successfully for order:',  response.json());
-    return await response.json();
+   
+    const result = await response.json();
+console.log('Driver assigned successfully for order:', result);
+return result;
   } catch (error) {
+    console.error('Error assigning driver:', error);
     throw error;
   }
 };

@@ -11,28 +11,86 @@ import { useOrders, ORDER_STATUS } from '../context/OrdersContext';
 const StatsScreen = () => {
   const { orders } = useOrders();
 
-  const today = new Date();
+  // Safely convert a currency-like value to number (handles "$1,234.56", "1.234,56", etc.)
+  const toNumber = (val) => {
+    if (val == null) return 0;
+    if (typeof val === 'number' && Number.isFinite(val)) return val;
+    if (typeof val === 'string') {
+      // Remove currency symbols and spaces
+      let s = val.trim();
+      // Common case: "$1,234.56" -> "1234.56"
+      s = s.replace(/[^0-9,.-]/g, '');
+      // If both comma and dot exist, assume comma is thousand separator
+      if (s.includes(',') && s.includes('.')) {
+        s = s.replace(/,/g, '');
+      } else if (s.includes(',') && !s.includes('.')) {
+        // If only comma exists, assume it's decimal separator: "1234,56" -> "1234.56"
+        s = s.replace(/,/g, '.');
+      }
+      const n = parseFloat(s);
+      return Number.isFinite(n) ? n : 0;
+    }
+    return 0;
+  };
+
+  // Determine best total for an order with fallbacks
+  const getOrderTotal = (order) => {
+    if (!order) return 0;
+    const candidates = [order.total, order.totalPrice, order.total_amount];
+    for (const c of candidates) {
+      const n = toNumber(c);
+      if (n > 0) return n;
+    }
+    // Fallback: compute from items if totals missing
+    const items = Array.isArray(order.items)
+      ? order.items
+      : (typeof order.items === 'string' ? (() => { try { return JSON.parse(order.items); } catch { return []; } })() : []);
+    if (Array.isArray(items) && items.length) {
+      return items.reduce((sum, it) => sum + toNumber(it.price) * toNumber(it.quantity || 1), 0);
+    }
+    return 0;
+  };
+
+  // Compare only calendar dates (ignoring time) using a normalized YYYY-MM-DD key
+  const toDateOnlyKey = (val) => {
+    if (!val) return '';
+    const d = new Date(val);
+    if (isNaN(d)) return '';
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`; // local date key
+  };
+
+  const getOrderDateField = (order) => {
+    return order?.timestamp ?? order?.orderDate ?? order?.created_at ?? null;
+  };
+
+  const todayKey = toDateOnlyKey(new Date());
+
   const todayOrders = orders.filter(order => {
-    const orderDate = new Date(order.timestamp);
-    return orderDate.toDateString() === today.toDateString();
+    const key = toDateOnlyKey(getOrderDateField(order));
+    return key === todayKey;
   });
+// console.log('📊 Calculated stats for', orders, 'orders,', todayOrders.length, 'today') ;
+  const statusOf = (o) => String(o?.status ?? o?.orderStatus ?? '').toLowerCase();
 
   const stats = {
     totalOrders: orders.length,
     todayOrders: todayOrders.length,
-    pendingOrders: orders.filter(o => o.status === ORDER_STATUS.PENDING).length,
-    acceptedOrders: orders.filter(o => o.status === ORDER_STATUS.ACCEPTED).length,
-    pickingOrders: orders.filter(o => o.status === ORDER_STATUS.PICKING).length,
-    preparingOrders: orders.filter(o => o.status === ORDER_STATUS.PREPARING).length,
-    readyOrders: orders.filter(o => o.status === ORDER_STATUS.READY).length,
-    completedOrders: orders.filter(o => o.status === ORDER_STATUS.COMPLETED).length,
-    rejectedOrders: orders.filter(o => o.status === ORDER_STATUS.REJECTED).length,
+    pendingOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.PENDING).length,
+    acceptedOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.ACCEPTED).length,
+    pickingOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.PICKING).length,
+    preparingOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.PREPARING).length,
+    readyOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.READY).length,
+    completedOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.COMPLETED).length,
+    rejectedOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.REJECTED).length,
     totalRevenue: orders
-      .filter(o => o.status === ORDER_STATUS.COMPLETED)
-      .reduce((sum, order) => sum + parseFloat(order.total), 0),
+      .filter(o => statusOf(o) === ORDER_STATUS.COMPLETED)
+      .reduce((sum, order) => sum + getOrderTotal(order), 0),
     todayRevenue: todayOrders
-      .filter(o => o.status === ORDER_STATUS.COMPLETED)
-      .reduce((sum, order) => sum + parseFloat(order.total), 0),
+      .filter(o => statusOf(o) === ORDER_STATUS.COMPLETED)
+      .reduce((sum, order) => sum + getOrderTotal(order), 0),
   };
 
   const StatCard = ({ title, value, subtitle, color = '#007AFF' }) => (
@@ -72,7 +130,7 @@ const StatsScreen = () => {
             />
             <StatCard
               title="Revenue Today"
-              value={`$${stats.todayRevenue.toFixed(2)}`}
+              value={`$${Number(stats.todayRevenue || 0).toFixed(2)}`}
               subtitle="earnings"
               color="#FF9500"
             />
@@ -89,7 +147,7 @@ const StatsScreen = () => {
             />
             <StatCard
               title="Total Revenue"
-              value={`$${stats.totalRevenue.toFixed(2)}`}
+              value={`$${Number(stats.totalRevenue || 0).toFixed(2)}`}
               subtitle="all time"
               color="#FF9500"
             />

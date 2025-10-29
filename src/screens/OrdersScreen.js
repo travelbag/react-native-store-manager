@@ -59,6 +59,11 @@ const OrdersScreen = ({ route }) => {
       label: 'Assigned', 
       count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === 'assigned').length 
     },
+    { 
+      key: ORDER_STATUS.COMPLETED, 
+      label: 'Delivered', 
+      count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === 'delivered').length 
+    },
   ];
 
   // Simple filtering - each order appears in exactly one tab

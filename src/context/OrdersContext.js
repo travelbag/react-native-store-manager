@@ -13,7 +13,7 @@ export const ORDER_STATUS = {
   ACCEPTED: 'accepted',
   READY: 'ready',
   ASSIGNED: 'assigned',
-  COMPLETED: 'completed',
+  COMPLETED: 'delivered',
   REJECTED: 'rejected',
 };
 
@@ -82,7 +82,7 @@ function ordersReducer(state, action) {
     case ACTIONS.UPDATE_ITEM_STATUS: {
       const { orderId, itemId, status, scannedAt, pickedQuantity } = action.payload;
       
-      console.log('🔄 UPDATE_ITEM_STATUS:', { orderId, itemId, status, scannedAt, pickedQuantity });
+      //log('🔄 UPDATE_ITEM_STATUS:', { orderId, itemId, status, scannedAt, pickedQuantity });
 
       return {
         ...state,
@@ -90,7 +90,7 @@ function ordersReducer(state, action) {
           const matchesOrder = order.id === orderId || order.orderId === orderId;
           if (!matchesOrder) return order;
 
-          console.log('✅ Found matching order:', order.id || order.orderId);
+        //  console.log('✅ Found matching order:', order.id || order.orderId);
 
           // Normalize items to an array first (handles stringified JSON from backend)
           let normalizedItems = [];
@@ -108,7 +108,7 @@ function ordersReducer(state, action) {
 
           const updatedItems = normalizedItems.map(item => {
             if (item.id === itemId) {
-              console.log('✅ Updating item:', item.id, 'status:', status);
+              //console.log('✅ Updating item:', item.id, 'status:', status);
               return {
                 ...item,
                 status,
@@ -342,9 +342,9 @@ export function OrdersProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    console.log('🛒 OrdersContext initialized', isAuthenticated, manager);
+    //console.log('🛒 OrdersContext initialized', isAuthenticated, manager);
     if (isAuthenticated && manager) {
-      console.log('📦 Initializing notifications for orders');
+     // console.log('📦 Initializing notifications for orders');
       
        // Fetch orders from DB after login
     fetchOrdersFromDB().then(orders => {
@@ -405,7 +405,7 @@ const fetchOrdersFromDB = async (status = null) => {
   };
   const initializeNotifications = async () => {
     try {
-      console.log('🚀 Starting notification initialization...');
+      //log('🚀 Starting notification initialization...');
       // If Android and not using Firebase, use local notifications
       if (Platform.OS === 'android' && !API_CONFIG.USE_FIREBASE) {
         console.log('🔔 Using Expo local notifications for Android (no Firebase)');
@@ -422,7 +422,7 @@ const fetchOrdersFromDB = async (status = null) => {
         const token = await NotificationService.registerForPushNotificationsAsync();
         console.log('📲 Push token obtained:', token);
         if (token) {
-          console.log('✅ Valid push token received, registering with backend...');
+          //console.log('✅ Valid push token received, registering with backend...');
           await registerStoreManagerToken(token);
         } else {
           console.warn('⚠️ No push token received.');
@@ -573,11 +573,7 @@ const fetchOrdersFromDB = async (status = null) => {
         // Map backend fields to frontend order format
         const orderData = normalizeOrder(orderRaw);
         console.log('📦 Order details mapped:', orderData);
-          return {
-            ...orderData,
-            driverName: orderRaw.driverName || orderRaw.driver_name || '',
-            driverPhone: orderRaw.driverPhone || orderRaw.driver_number || orderRaw.driverMobile || '',
-          };
+        return orderData;
       } else {
         console.error('❌ Failed to fetch order details:', response.status);
         return null;
