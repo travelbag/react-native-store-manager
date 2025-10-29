@@ -53,11 +53,11 @@ const OrderPickingScreen = ({ route, navigation }) => {
   useEffect(() => {
     if (route.params?.scanSuccess) {
       // Show a brief success message
-      Alert.alert(
-        'Scan Successful! ✅',
-        'Item has been marked as picked.',
-        [{ text: 'OK' }]
-      );
+      // Alert.alert(
+      //   'Scan Successful! ✅',
+      //   'Item has been marked as picked.',
+      //   [{ text: 'OK' }]
+      // );
       // Clear the param to prevent showing again
       navigation.setParams({ scanSuccess: undefined });
     }
