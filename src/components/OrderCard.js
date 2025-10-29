@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   Alert,
   Image,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useOrders, ORDER_STATUS, ITEM_STATUS } from '../context/OrdersContext';
@@ -38,6 +39,30 @@ const OrderCard = ({ order }) => {
   const phoneNumber = order?.phoneNumber || '';
   const deliveryType = order?.deliveryType || '';
   const specialInstructions = order?.specialInstructions || '';
+  const driverName = order?.driverName || '';
+  const driverPhone = order?.driverPhone || '';
+
+  const handleCall = async (number) => {
+    try {
+      const raw = String(number || '').trim();
+      if (!raw) {
+        Alert.alert('No phone number', 'There is no phone number available to call.');
+        return;
+      }
+      // Allow + and digits only in the tel: URI
+      const cleaned = raw.replace(/[^\d+]/g, '');
+      const url = `tel:${cleaned}`;
+      const supported = await Linking.canOpenURL(url);
+      if (!supported) {
+        Alert.alert('Cannot place call', 'This device cannot make phone calls.');
+        return;
+      }
+      await Linking.openURL(url);
+    } catch (e) {
+      console.error('Failed to initiate call', e);
+      Alert.alert('Error', 'Unable to open the phone dialer.');
+    }
+  };
 
   const getStatusColor = (status) => {
     switch (status) {
@@ -207,6 +232,30 @@ const OrderCard = ({ order }) => {
           <Text style={styles.infoLabel}>Phone:</Text>
           <Text style={styles.infoText}>{phoneNumber}</Text>
         </View>
+        {(driverName || driverPhone) ? (
+          <View style={styles.driverBlock}>
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Driver:</Text>
+              <Text style={styles.infoTextDriver}>{driverName || 'Assigned'}</Text>
+            </View>
+            {driverPhone ? (
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Driver Phone:</Text>
+                <View style={styles.phoneRow}>
+                  <Text style={styles.infoTextDriver}>{driverPhone}</Text>
+                  <TouchableOpacity
+                    accessibilityLabel="Call driver"
+                    onPress={() => handleCall(driverPhone)}
+                    style={styles.callButton}
+                    hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                  >
+                    <Ionicons name="call-outline" size={30} color="#007AFF" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
         {specialInstructions && (
           <>
             <Text style={styles.infoLabel}>Special Instructions:</Text>
@@ -310,6 +359,9 @@ const styles = StyleSheet.create({
   orderInfo: {
     marginBottom: 16,
   },
+  driverBlock: {
+    marginTop: 8,
+  },
   infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -326,10 +378,29 @@ const styles = StyleSheet.create({
     color: '#000000',
   },
   infoText: {
-    fontSize: 14,
+    fontSize: 16,
     color: '#666666',
     flex: 1,
     textAlign: 'right',
+  },
+   infoTextDriver: {
+    fontSize: 20,
+    color: '#FF3B30',
+    flex: 1,
+    fontWeight: '500',
+    textAlign: 'right',
+  },
+  phoneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    flex: 1,
+  },
+  callButton: {
+    marginLeft: 8,
+    padding: 4,
+    borderRadius: 16,
+    backgroundColor: 'transparent',
   },
   actionButtons: {
     flexDirection: 'row',

@@ -54,8 +54,9 @@ function ordersReducer(state, action) {
     
     case ACTIONS.ADD_ORDER:
       // Replace existing order if present, otherwise add new
-      const newOrderId = action.payload.orderId || action.payload.id;
-      const orders = state.orders.filter(o => (o.orderId || o.id) !== newOrderId);
+      // Normalize IDs to string to avoid number/string duplicates (e.g., 1520 vs '1520')
+      const newOrderKey = String(action.payload.orderId ?? action.payload.id ?? '');
+      const orders = state.orders.filter(o => String(o.orderId ?? o.id ?? '') !== newOrderKey);
       return {
         ...state,
         orders: [action.payload, ...orders],
@@ -66,7 +67,9 @@ function ordersReducer(state, action) {
       return {
         ...state,
         orders: state.orders.map(order => {
-          if (order.id === action.payload.orderId || order.orderId === action.payload.orderId) {
+          const orderKey = String(order.id ?? order.orderId ?? '');
+          const targetKey = String(action.payload.orderId ?? '');
+          if (orderKey === targetKey) {
             return {
               ...order,
               status: action.payload.status,
@@ -126,11 +129,11 @@ function ordersReducer(state, action) {
     }
     
     case ACTIONS.SET_ORDERS:
-      // Remove duplicate orders by orderId (backend key)
+      // Remove duplicate orders by orderId (backend key) — coerce to string for reliable comparison
       const uniqueOrders = [];
       const seenOrderIds = new Set();
       for (const order of action.payload) {
-        const key = order.orderId || order.id;
+        const key = String(order.orderId ?? order.id ?? '');
         if (!seenOrderIds.has(key)) {
           uniqueOrders.push(order);
           seenOrderIds.add(key);
@@ -331,7 +334,10 @@ export function OrdersProvider({ children }) {
       deliveryLatitude: orderRaw.deliveryLatitude ?? '',
       deliveryLongitude: orderRaw.deliveryLongitude ?? '',
       paymentType: orderRaw.paymentType ?? '',
-      driverId: orderRaw.driverId ?? null,
+      // Driver assignment fields (for Assigned tab display)
+      driverId: orderRaw.driverId ?? orderRaw.driver_id ?? orderRaw.driver?.id ?? null,
+      driverName: orderRaw.driverName ?? orderRaw.driver_name ?? orderRaw.driver?.name ?? '',
+      driverPhone: orderRaw.driverPhone ?? orderRaw.driver_phone ?? orderRaw.driver?.phone ?? orderRaw.driver_mobile ?? '',
     };
   }, []);
 
@@ -360,6 +366,7 @@ export function OrdersProvider({ children }) {
     }
     }
   }, [isAuthenticated, manager]);
+
 // Fetch orders from backend DB by storeId and optional status
 const fetchOrdersFromDB = async (status = null) => {
   if (!manager || !manager.storeId) {
@@ -367,11 +374,14 @@ const fetchOrdersFromDB = async (status = null) => {
     return [];
   }
   let url = buildApiUrl(`/orders/by-store/${manager.storeId}`);
-  console.log('Fetching orders from DB with URL:', url);
+  //console.log('Fetching orders from DB with URL:', url);
   if (status) url += `?status=${status}`;
   try {
     const response = await fetch(url, { headers: getAuthHeaders() });
     const data = await response.json();
+   
+
+    //console.log('Fetched orders data from DB:', data);
     const rawOrders = data.orders || data || [];
     const normalized = Array.isArray(rawOrders)
       ? rawOrders.map(normalizeOrder).filter(Boolean)
