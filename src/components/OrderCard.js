@@ -42,27 +42,7 @@ const OrderCard = ({ order }) => {
   const driverName = order?.driverName || '';
   const driverPhone = order?.driverPhone || '';
 
-  const handleCall = async (number) => {
-    try {
-      const raw = String(number || '').trim();
-      if (!raw) {
-        Alert.alert('No phone number', 'There is no phone number available to call.');
-        return;
-      }
-      // Allow + and digits only in the tel: URI
-      const cleaned = raw.replace(/[^\d+]/g, '');
-      const url = `tel:${cleaned}`;
-      const supported = await Linking.canOpenURL(url);
-      if (!supported) {
-        Alert.alert('Cannot place call', 'This device cannot make phone calls.');
-        return;
-      }
-      await Linking.openURL(url);
-    } catch (e) {
-      console.error('Failed to initiate call', e);
-      Alert.alert('Error', 'Unable to open the phone dialer.');
-    }
-  };
+
 
   const getStatusColor = (status) => {
     switch (status) {
@@ -132,6 +112,21 @@ const OrderCard = ({ order }) => {
       Alert.alert('Success', 'Driver assigned successfully!');
     } catch (error) {
       Alert.alert('Error', error.message || 'Failed to assign driver');
+    }
+  };
+
+  const handleCall = async (phone) => {
+    if (!phone) return;
+    const url = `tel:${phone}`;
+    try {
+      const supported = await Linking.canOpenURL(url);
+      if (supported) {
+        await Linking.openURL(url);
+      } else {
+        Alert.alert('Not supported', 'Phone calls are not supported on this device.');
+      }
+    } catch (e) {
+      Alert.alert('Error', 'Unable to initiate the call.');
     }
   };
 
@@ -243,14 +238,17 @@ const OrderCard = ({ order }) => {
                 <Text style={styles.infoLabel}>Driver Phone:</Text>
                 <View style={styles.phoneRow}>
                   <Text style={styles.infoTextDriver}>{driverPhone}</Text>
-                  <TouchableOpacity
+                    <TouchableOpacity onPress={() => handleCall(driverPhone)}>
+                      <Ionicons name="call-outline" size={30} color="#007AFF" style={styles.callIcon} />
+                    </TouchableOpacity>
+                  {/* <TouchableOpacity
                     accessibilityLabel="Call driver"
                     onPress={() => handleCall(driverPhone)}
                     style={styles.callButton}
                     hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
                   >
                     <Ionicons name="call-outline" size={30} color="#007AFF" />
-                  </TouchableOpacity>
+                  </TouchableOpacity> */}
                 </View>
               </View>
             ) : null}

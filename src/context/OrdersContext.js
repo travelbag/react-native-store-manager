@@ -573,7 +573,11 @@ const fetchOrdersFromDB = async (status = null) => {
         // Map backend fields to frontend order format
         const orderData = normalizeOrder(orderRaw);
         console.log('📦 Order details mapped:', orderData);
-        return orderData;
+          return {
+            ...orderData,
+            driverName: orderRaw.driverName || orderRaw.driver_name || '',
+            driverPhone: orderRaw.driverPhone || orderRaw.driver_number || orderRaw.driverMobile || '',
+          };
       } else {
         console.error('❌ Failed to fetch order details:', response.status);
         return null;
