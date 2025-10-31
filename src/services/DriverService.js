@@ -14,14 +14,14 @@ export const assignDriver = async (orderId, storeId) => {
     });
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Failed to assign driver: ${errorText}`);
+      throw new Error('No drivers available');
     }
    
     const result = await response.json();
 console.log('Driver assigned successfully for order:', result);
 return result;
   } catch (error) {
-    console.error('Error assigning driver:', error);
+    console.log('Error assigning driver:', error);
     throw error;
   }
 };
