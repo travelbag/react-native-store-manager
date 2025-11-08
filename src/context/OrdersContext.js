@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useReducer, useEffect } from 'react';
 import * as Notifications from 'expo-notifications';
-import { Platform } from 'react-native';
+import { Platform, AppState } from 'react-native';
 import NotificationService from '../services/NotificationService';
 import { API_CONFIG, buildApiUrl } from '../config/api';
 import { useAuth } from './AuthContext';
@@ -267,7 +267,15 @@ export function OrdersProvider({ children }) {
   const [state, dispatch] = useReducer(ordersReducer, initialState);
   const { isAuthenticated, manager, getAuthHeaders } = useAuth();
   const [demoInterval, setDemoInterval] = React.useState(null);
-  const [syncInterval, setSyncInterval] = React.useState(null);
+  // Use ref for polling interval to avoid stale closures and duplicate timers
+  const syncIntervalRef = React.useRef(null);
+  // Switch to timeout-based polling to ensure spacing after each fetch completes
+  const pollTimeoutRef = React.useRef(null);
+  const [isAppActive, setIsAppActive] = React.useState(true);
+  const consecutiveFailuresRef = React.useRef(0);
+  const appStateRef = React.useRef(AppState.currentState);
+  const isFetchingRef = React.useRef(false);
+  const lastFetchAtRef = React.useRef(0);
 
   // Normalize a raw order from backend into app shape and apply item scanned mapping
   const normalizeOrder = React.useCallback((orderRaw) => {
@@ -342,33 +350,87 @@ export function OrdersProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    //console.log('🛒 OrdersContext initialized', isAuthenticated, manager);
-    if (isAuthenticated && manager) {
-     // console.log('📦 Initializing notifications for orders');
-      
-       // Fetch orders from DB after login
-    fetchOrdersFromDB().then(orders => {
-      dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
-    });
-    initializeNotifications();
+    // Start/stop foreground polling based on auth, manager, and app activity
+    const stopTimers = () => {
+      if (syncIntervalRef.current) {
+        clearInterval(syncIntervalRef.current);
+        syncIntervalRef.current = null;
+      }
+      if (pollTimeoutRef.current) {
+        clearTimeout(pollTimeoutRef.current);
+        pollTimeoutRef.current = null;
+      }
+    };
 
-    // Start foreground polling to keep devices in sync
-    if (!syncInterval) {
-      const id = setInterval(async () => {
+    const schedulePoll = () => {
+      if (pollTimeoutRef.current) {
+        clearTimeout(pollTimeoutRef.current);
+      }
+      pollTimeoutRef.current = setTimeout(async () => {
+        if (isFetchingRef.current) {
+          // If a fetch is in progress, reschedule to avoid overlap
+          schedulePoll();
+          return;
+        }
+        isFetchingRef.current = true;
         try {
-          const orders = await fetchOrdersFromDB();
+          const orders = await fetchOrdersFromDB(null, 'interval');
+          consecutiveFailuresRef.current = 0; // reset failures on success
           dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
         } catch (e) {
-          // ignore polling errors
+          consecutiveFailuresRef.current += 1;
+          if (consecutiveFailuresRef.current >= 5) {
+            console.warn('🛑 Stopping polling after repeated failures (server likely down).');
+            stopTimers();
+            return; // do not reschedule
+          }
+        } finally {
+          lastFetchAtRef.current = Date.now();
+          isFetchingRef.current = false;
+          // Reschedule next tick
+          schedulePoll();
         }
-      }, 5000); // poll every 5s for faster cross-device sync
-      setSyncInterval(id);
+      }, API_CONFIG.POLL_INTERVAL);
+    };
+
+    if (isAuthenticated && manager && isAppActive) {
+      // Initial fetch after login/foreground
+      fetchOrdersFromDB(null, 'initial').then(orders => {
+        dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
+      });
+      initializeNotifications();
+      // Ensure no interval remains
+      if (syncIntervalRef.current) {
+        clearInterval(syncIntervalRef.current);
+        syncIntervalRef.current = null;
+      }
+      // Start timeout-based polling
+      schedulePoll();
+    } else {
+      // Stop polling if conditions are not met (logged out, manager missing, or app background)
+      stopTimers();
     }
-    }
-  }, [isAuthenticated, manager]);
+
+    // Cleanup when deps change/unmount
+    return () => {
+      stopTimers();
+    };
+  }, [isAuthenticated, manager, isAppActive]);
+
+  // Observe app state to pause polling when app goes to background/inactive
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (nextState) => {
+      appStateRef.current = nextState;
+      const active = nextState === 'active';
+      setIsAppActive(active);
+    });
+    return () => {
+      sub.remove();
+    };
+  }, []);
 
 // Fetch orders from backend DB by storeId and optional status
-const fetchOrdersFromDB = async (status = null) => {
+const fetchOrdersFromDB = async (status = null, source = 'manual') => {
   if (!manager || !manager.storeId) {
     console.error('❌ No storeId found for manager');
     return [];
@@ -377,6 +439,12 @@ const fetchOrdersFromDB = async (status = null) => {
   //console.log('Fetching orders from DB with URL:', url);
   if (status) url += `?status=${status}`;
   try {
+    if (__DEV__ && source === 'interval') {
+      // Keep logs light to avoid noisy console during polling; only tag interval
+      const now = Date.now();
+      const diff = lastFetchAtRef.current ? (now - lastFetchAtRef.current) : 0;
+      console.debug(`📡 (poll) Fetching orders from DB • +${diff}ms`);
+    }
     const response = await fetch(url, { headers: getAuthHeaders() });
     const data = await response.json();
    
@@ -395,12 +463,56 @@ const fetchOrdersFromDB = async (status = null) => {
   // Public refresh helper to manually re-fetch orders
   const refreshOrders = async (status = null) => {
     try {
-      const orders = await fetchOrdersFromDB(status);
+      // Debounce manual refreshes that occur too soon after a poll to reduce spam
+      const now = Date.now();
+      if (now - lastFetchAtRef.current < 1500) {
+        if (__DEV__) console.debug('⏳ Skipping manual refresh (recent poll)');
+        return state.orders;
+      }
+      const orders = await fetchOrdersFromDB(status, 'manual');
       dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
       return orders;
     } catch (e) {
       console.warn('⚠️ Failed to refresh orders:', e);
       return [];
+    }
+  };
+  // Helpers to control sync polling manually (exposed via context for advanced control)
+  const stopSyncPolling = () => {
+    if (syncIntervalRef.current) {
+      clearInterval(syncIntervalRef.current);
+      syncIntervalRef.current = null;
+    }
+  };
+
+  const startSyncPolling = () => {
+    // Prefer timeout-based scheduler
+    if (isAuthenticated && manager && isAppActive) {
+      if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
+      pollTimeoutRef.current = setTimeout(async function scheduleManualStart() {
+        if (isFetchingRef.current) {
+          pollTimeoutRef.current = setTimeout(scheduleManualStart, API_CONFIG.POLL_INTERVAL);
+          return;
+        }
+        isFetchingRef.current = true;
+        try {
+          const orders = await fetchOrdersFromDB(null, 'interval');
+          consecutiveFailuresRef.current = 0;
+          dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
+        } catch (e) {
+          consecutiveFailuresRef.current += 1;
+          if (consecutiveFailuresRef.current >= 5) {
+            console.warn('🛑 Stopping polling after repeated failures (server likely down).');
+            clearTimeout(pollTimeoutRef.current);
+            pollTimeoutRef.current = null;
+            return;
+          }
+        } finally {
+          lastFetchAtRef.current = Date.now();
+          isFetchingRef.current = false;
+          pollTimeoutRef.current = setTimeout(scheduleManualStart, API_CONFIG.POLL_INTERVAL);
+        }
+      }, API_CONFIG.POLL_INTERVAL);
     }
   };
   const initializeNotifications = async () => {
@@ -813,7 +925,10 @@ const fetchOrdersFromDB = async (status = null) => {
         const interval = startDemoMode();
         setDemoInterval(interval);
       }
-    }
+    },
+    // Manual sync polling control
+    startSyncPolling,
+    stopSyncPolling
   };
 
   // Cleanup function
@@ -826,13 +941,18 @@ const fetchOrdersFromDB = async (status = null) => {
         clearInterval(demoInterval);
         setDemoInterval(null);
       }
-      if (syncInterval) {
+      if (syncIntervalRef.current) {
         console.log('🛑 Clearing sync interval');
-        clearInterval(syncInterval);
-        setSyncInterval(null);
+        clearInterval(syncIntervalRef.current);
+        syncIntervalRef.current = null;
+      }
+      if (pollTimeoutRef.current) {
+        console.log('🛑 Clearing poll timeout');
+        clearTimeout(pollTimeoutRef.current);
+        pollTimeoutRef.current = null;
       }
     };
-  }, [demoInterval, syncInterval]);
+  }, [demoInterval]);
 
   return (
     <OrdersContext.Provider value={value}>

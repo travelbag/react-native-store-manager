@@ -34,7 +34,7 @@ const LoginScreen = ({ navigation }) => {
     
     try {
       const result = await login(username.trim(), password);
-      
+      console.log('Login result:', result);
       if (result.success) {
         // Navigation will be handled automatically by the auth state change
         console.log('✅ Login successful:', result.manager.name);

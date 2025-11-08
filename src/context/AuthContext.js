@@ -162,7 +162,7 @@ export function AuthProvider({ children }) {
 
     //     return { success: true, manager: mockManager };
     //   }
-   // console.log(buildApiUrl(API_CONFIG.ENDPOINTS.LOGIN));
+   console.log(buildApiUrl(API_CONFIG.ENDPOINTS.LOGIN));
     //console.log(JSON.stringify({ username, password }))
 
       // Real API login
@@ -175,7 +175,7 @@ export function AuthProvider({ children }) {
       });
 
       const data = await response.json();
-
+       console.log('Login response data:', data);
       if (response.ok) {
         // Store auth data
         await AsyncStorage.setItem('authToken', data.token);
