@@ -9,6 +9,7 @@ import StatsScreen from '../screens/StatsScreen';
 import OrderPickingScreen from '../screens/OrderPickingScreen';
 import BarcodeScannerScreen from '../screens/BarcodeScannerScreen';
 import BarcodeScannerFallback from '../screens/BarcodeScannerFallback';
+import ProfileScreen from '../screens/ProfileScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
@@ -21,6 +22,7 @@ function OrdersStack() {
       <Stack.Screen name="OrderPicking" component={OrderPickingScreen} />
       <Stack.Screen name="BarcodeScanner" component={BarcodeScannerScreen} />
       <Stack.Screen name="BarcodeScannerFallback" component={BarcodeScannerFallback} />
+      <Stack.Screen name="Profile" component={ProfileScreen} />
     </Stack.Navigator>
   );
 }
