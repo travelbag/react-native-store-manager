@@ -8,21 +8,44 @@ const ProfileScreen = ({ navigation }) => {
 
   const handleSignOut = () => {
     Alert.alert(
-      "Sign Out",
-      "Are you sure you want to sign out?",
+      'Sign Out',
+      'Are you sure you want to sign out?',
       [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Sign Out",
-          style: "destructive",
-          onPress: async () => {
-            await removePushToken(manager.id, manager.storeId, manager.pushToken);
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Sign Out', 
+          style: 'destructive',
+          onPress: () => {
+            // Call the function to remove the push token here
+            removePushTokenOnLogout(manager.id, manager.storeId, manager.pushToken);
             logout();
           },
         },
       ]
     );
   };
+
+  // Call this when logging out
+  async function removePushTokenOnLogout(storeManagerId, storeId, pushToken) {
+    try {
+      const response = await fetch(
+        `https://ubgukf7hdu.us-east-1.awsapprunner.com/api/store-managers/${storeManagerId}/remove-token`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ storeId, pushToken }),
+        }
+      );
+      const result = await response.json();
+      if (response.ok) {
+        console.log('Push token removed:', result.message);
+      } else {
+        console.warn('Failed to remove push token:', result.message);
+      }
+    } catch (e) {
+      console.error('Error removing push token:', e);
+    }
+  }
 
   const handleDeleteAccount = () => {
     Alert.alert(
