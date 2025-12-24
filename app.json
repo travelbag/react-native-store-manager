@@ -1,23 +1,23 @@
 {
   "expo": {
     "name": "Littlekart Store Manager",
-    "slug": "Littlekart Store Manager",
+    "slug": "react-native-store-manager",
     "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "splash": {
-      "image": "./assets/icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
-    },
     "ios": {
+      "icon": "./assets/icon.png",
       "supportsTablet": true,
       "buildNumber": "1.0.2",
-      "infoPlist": {
-        "NSCameraUsageDescription": "This app needs access to the camera to scan product barcodes for order fulfillment.",
-        "ITSAppUsesNonExemptEncryption": false
-
+       "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCalendarsUsageDescription": "This app needs access to your calendar to manage events.",
+        "NSCameraUsageDescription": "This app requires camera access to scan store QR codes and capture photos/videos.",
+        "NSMicrophoneUsageDescription": "This app requires microphone access for recording video/audio.",
+        "NSPhotoLibraryUsageDescription": "This app needs access to your photo library to allow you to upload your profile photo, driver's license, and vehicle registration documents during account setup. For example, you can select and upload your license photo from your photo library to complete your driver verification.",
+        "NSLocationWhenInUseUsageDescription": "This app uses your location to show your position on the map.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "This app requires access to your location even in the background."
       },
       "bundleIdentifier": "com.littlekart1.reactnativestoremanager"
     },
@@ -36,9 +36,6 @@
         "android.permission.CAMERA"
       ],
       "package": "com.littlekart1.reactnativestoremanager"
-    },
-    "web": {
-      "favicon": "./assets/icon.png"
     },
     "plugins": [
       [
