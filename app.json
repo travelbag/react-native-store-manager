@@ -1,18 +1,19 @@
 {
   "expo": {
-    "name": "react-native-store-manager",
-    "slug": "react-native-store-manager",
+    "name": "Littlekart Store Manager",
+    "slug": "Littlekart Store Manager",
     "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
     "ios": {
       "supportsTablet": true,
+      "buildNumber": "1.0.2",
       "infoPlist": {
         "NSCameraUsageDescription": "This app needs access to the camera to scan product barcodes for order fulfillment.",
         "ITSAppUsesNonExemptEncryption": false
@@ -21,8 +22,9 @@
       "bundleIdentifier": "com.littlekart1.reactnativestoremanager"
     },
     "android": {
+      "versionCode": 4,
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#ffffff"
       },
       "googleServicesFile": "./google-services.json",
@@ -36,7 +38,7 @@
       "package": "com.littlekart1.reactnativestoremanager"
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/icon.png"
     },
     "plugins": [
       [
