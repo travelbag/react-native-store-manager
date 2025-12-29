@@ -622,10 +622,14 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
         console.log('✅ Store manager token registered successfully:', result);
         return result;
       } else {
-        console.error('❌ Failed to register token:', response.status);
+        // Don't log 401 errors - the fetch interceptor handles logout
+        if (response.status !== 401) {
+          console.error('❌ Failed to register token:', response.status);
+        }
         return null;
       }
     } catch (error) {
+      // Silent on network errors during logout flow
       console.error('❌ Error registering token:', error);
       return null;
     }

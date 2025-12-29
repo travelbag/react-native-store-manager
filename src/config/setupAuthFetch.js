@@ -44,9 +44,10 @@ export function setupAuthFetch(onUnauthorized) {
       const nextInit = { ...init, headers };
       const response = await originalFetch(input, nextInit);
 
-      // Handle 401 Unauthorized - JWT expired or invalid
-      if (response.status === 401) {
-        console.log('🔒 401 Unauthorized - Token expired or invalid');
+      // Handle 401 Unauthorized - JWT expired or invalid (skip for login requests)
+      const isLoginRequest = typeof url === 'string' && url.includes('/login');
+      if (response.status === 401 && !isLoginRequest) {
+        console.log('🔒 401 Unauthorized - Token expired or invalid, logging out...');
         
         // Clear stored auth data
         await AsyncStorage.multiRemove(['authToken', 'managerData']);
