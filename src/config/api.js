@@ -14,6 +14,7 @@ export const API_CONFIG = {
   // API Endpoints
   ENDPOINTS: {
     LOGIN: '/store-managers/login',
+    REFRESH_TOKEN: '/auth/refresh',
     VERIFY_TOKEN: '/store-managers/verify',
     REGISTER_TOKEN: '/store-managers/{id}/register-token',
     // Keep endpoints relative to BASE_URL (which already ends with /api)
