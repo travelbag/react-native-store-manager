@@ -67,12 +67,42 @@ function authReducer(state, action) {
   }
 }
 
-export function AuthProvider({ children }) {
+export function AuthProvider({ children, logoutHandlerRef }) {
   const [state, dispatch] = useReducer(authReducer, initialState);
 
   useEffect(() => {
     checkStoredAuth();
+    
+    // Set up periodic token expiration check every minute
+    const tokenCheckInterval = setInterval(() => {
+      checkTokenExpiration();
+    }, 60000); // Check every 60 seconds
+
+    return () => clearInterval(tokenCheckInterval);
   }, []);
+
+  // Expose logout function to parent via ref
+  useEffect(() => {
+    if (logoutHandlerRef) {
+      logoutHandlerRef.current = logout;
+    }
+  }, []);
+
+  // Check if current token is expired and logout if needed
+  const checkTokenExpiration = async () => {
+    try {
+      const token = await AsyncStorage.getItem('authToken');
+      if (token && state.isAuthenticated) {
+        const isValid = await verifyToken(token);
+        if (!isValid) {
+          console.log('⏰ Token expired - logging out');
+          await logout();
+        }
+      }
+    } catch (error) {
+      console.error('Error checking token expiration:', error);
+    }
+  };
 
   // Check if user is already logged in
   const checkStoredAuth = async () => {
@@ -116,7 +146,13 @@ export function AuthProvider({ children }) {
         if (parts.length === 3) {
           const payload = JSON.parse(atob(parts[1]));
           const currentTime = Math.floor(Date.now() / 1000);
-          return payload.exp > currentTime;
+          const isValid = payload.exp > currentTime;
+          
+          if (!isValid) {
+            console.log('🔒 JWT token expired at:', new Date(payload.exp * 1000).toISOString());
+          }
+          
+          return isValid;
         }
       } catch (e) {
         // If not JWT, just return true for now

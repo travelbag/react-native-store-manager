@@ -4,10 +4,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_CONFIG } from './api';
 
 let installed = false;
+let logoutCallback = null;
 
-export function setupAuthFetch() {
+export function setupAuthFetch(onUnauthorized) {
   if (installed) return;
   installed = true;
+
+  logoutCallback = onUnauthorized;
 
   const originalFetch = global.fetch;
 
@@ -39,10 +42,29 @@ export function setupAuthFetch() {
       }
 
       const nextInit = { ...init, headers };
-      return originalFetch(input, nextInit);
+      const response = await originalFetch(input, nextInit);
+
+      // Handle 401 Unauthorized - JWT expired or invalid
+      if (response.status === 401) {
+        console.log('🔒 401 Unauthorized - Token expired or invalid');
+        
+        // Clear stored auth data
+        await AsyncStorage.multiRemove(['authToken', 'managerData']);
+        
+        // Trigger logout callback if provided
+        if (logoutCallback) {
+          logoutCallback();
+        }
+      }
+
+      return response;
     } catch (e) {
       // In case of any interceptor error, fall back to the original fetch
       return originalFetch(input, init);
     }
   };
+}
+
+export function setLogoutCallback(callback) {
+  logoutCallback = callback;
 }
