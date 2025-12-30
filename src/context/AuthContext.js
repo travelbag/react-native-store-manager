@@ -217,6 +217,11 @@ export function AuthProvider({ children, logoutHandlerRef }) {
         await AsyncStorage.setItem('authToken', data.token);
         await AsyncStorage.setItem('managerData', JSON.stringify(data.manager));
         
+        // Store refresh token if provided by backend
+        if (data.refreshToken) {
+          await AsyncStorage.setItem('refreshToken', data.refreshToken);
+        }
+        
         dispatch({
           type: AUTH_ACTIONS.LOGIN_SUCCESS,
           payload: {
@@ -253,7 +258,7 @@ export function AuthProvider({ children, logoutHandlerRef }) {
   // Clear stored authentication data
   const clearStoredAuth = async () => {
     try {
-      await AsyncStorage.multiRemove(['authToken', 'managerData']);
+      await AsyncStorage.multiRemove(['authToken', 'refreshToken', 'managerData']);
     } catch (error) {
       console.error('Error clearing stored auth:', error);
     }

@@ -62,21 +62,35 @@ class NotificationService {
         
         console.log('✅ Expo Push Token obtained:', token);
       } catch (e) {
-        console.error('❌ Error getting push token:', e);
-        console.log('🔄 Trying fallback method...');
+        const isNetworkError = e.message?.includes('Network request failed') || e.message?.includes('network');
         
-        // Fallback: try without project ID for development
-        try {
-          token = (await Notifications.getExpoPushTokenAsync()).data;
-          console.log('✅ Fallback token obtained:', token);
-        } catch (fallbackError) {
-          console.error('❌ Fallback method also failed:', fallbackError);
-          
-          // For development, create a mock token
-          if (isDevelopment && !isPhysicalDevice) {
-            token = `ExponentPushToken[mock_token_${Date.now()}_simulator]`;
-            console.log('🎭 Mock token created for simulator:', token);
-          } else {
+        if (isNetworkError) {
+          console.warn('⚠️ Network error getting push token - working offline');
+          console.log('💡 Push notifications will work once network is restored');
+        } else {
+          console.error('❌ Error getting push token:', e.message || e);
+        }
+        
+        // Create a local token for development/offline mode
+        // This allows the app to continue functioning without crashing
+        if (isDevelopment || !isPhysicalDevice) {
+          const deviceType = Platform.OS === 'ios' ? 'ios' : 'android';
+          const deviceId = Device.modelName || 'unknown';
+          token = `ExponentPushToken[local_${deviceType}_${deviceId}_${Date.now()}]`;
+          console.log('🎭 Generated local token (offline mode):', token);
+        } else {
+          // For production on physical device, try one more time with timeout
+          console.log('🔄 Retrying with timeout...');
+          try {
+            const timeoutPromise = new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Timeout')), 5000)
+            );
+            const tokenPromise = Notifications.getExpoPushTokenAsync({ projectId });
+            token = (await Promise.race([tokenPromise, timeoutPromise])).data;
+            console.log('✅ Token obtained on retry:', token);
+          } catch (retryError) {
+            console.warn('⚠️ Push token unavailable - notifications disabled');
+            // Return null so the app knows notifications are unavailable
             return null;
           }
         }

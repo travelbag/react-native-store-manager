@@ -532,23 +532,17 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
       } else {
         // Get push token and register with backend
         const token = await NotificationService.registerForPushNotificationsAsync();
-        console.log('📲 Push token obtained:', token);
+        console.log('📲 Push token result:', token ? 'obtained' : 'unavailable');
+        
         if (token) {
-          //console.log('✅ Valid push token received, registering with backend...');
+          // Valid token received, register with backend
           await registerStoreManagerToken(token);
         } else {
-          console.warn('⚠️ No push token received.');
-          if (__DEV__) {
-            console.log('🧪 Development mode: Creating mock token for testing...');
-            const mockToken = NotificationService.createMockToken();
-            if (mockToken) {
-              console.log('🎭 Using mock token for development:', mockToken);
-              await registerStoreManagerToken(mockToken);
-            }
-          } else {
-            console.log('💡 Push notifications require physical device in production.');
-          }
+          console.warn('⚠️ Push notifications unavailable (network issue or no device)');
+          console.log('📱 App will continue to work, but notifications are disabled');
+          console.log('💡 Push notifications will activate when network is restored');
         }
+        
         // Set up notification listeners for real push notifications
         NotificationService.setupNotificationListeners(
           (notification) => {
