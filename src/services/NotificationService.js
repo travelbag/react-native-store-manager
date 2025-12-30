@@ -124,10 +124,6 @@ class NotificationService {
   }
 
   setupNotificationListeners(onNotificationReceived, onNotificationResponseReceived) {
-    // CRITICAL: Remove any existing listeners first to prevent duplicates
-    // This ensures we don't create orphaned listeners that remain subscribed
-    this.removeNotificationListeners();
-    
     // Listen for incoming notifications while app is foregrounded
     this.notificationListener = Notifications.addNotificationReceivedListener(notification => {
       console.log('Notification received:', notification);
