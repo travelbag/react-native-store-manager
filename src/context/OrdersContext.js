@@ -276,6 +276,10 @@ export function OrdersProvider({ children }) {
   const appStateRef = React.useRef(AppState.currentState);
   const isFetchingRef = React.useRef(false);
   const lastFetchAtRef = React.useRef(0);
+  // Track if notifications are already initialized to prevent duplicate listeners
+  const notificationsInitializedRef = React.useRef(false);
+  // Track recently handled notifications to prevent duplicate processing
+  const recentNotificationsRef = React.useRef(new Set());
 
   // Normalize a raw order from backend into app shape and apply item scanned mapping
   const normalizeOrder = React.useCallback((orderRaw) => {
@@ -398,7 +402,14 @@ export function OrdersProvider({ children }) {
       fetchOrdersFromDB(null, 'initial').then(orders => {
         dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
       });
-      initializeNotifications();
+      
+      // Only initialize notifications once per session to prevent duplicate listeners
+      if (!notificationsInitializedRef.current) {
+        console.log('🔔 Initializing notifications (first time)');
+        initializeNotifications();
+        notificationsInitializedRef.current = true;
+      }
+      
       // Ensure no interval remains
       if (syncIntervalRef.current) {
         clearInterval(syncIntervalRef.current);
@@ -414,6 +425,12 @@ export function OrdersProvider({ children }) {
     // Cleanup when deps change/unmount
     return () => {
       stopTimers();
+      // Clean up notification listeners when user logs out (isAuthenticated changes to false)
+      if (!isAuthenticated) {
+        console.log('🧹 Cleaning up notifications on logout');
+        NotificationService.removeNotificationListeners();
+        notificationsInitializedRef.current = false;
+      }
     };
   }, [isAuthenticated, manager, isAppActive]);
 
@@ -518,6 +535,12 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
   const initializeNotifications = async () => {
     try {
       //log('🚀 Starting notification initialization...');
+      
+      // CRITICAL: Remove any existing listeners BEFORE setting up new ones
+      // This prevents duplicate notifications when app becomes active or user re-authenticates
+      NotificationService.removeNotificationListeners();
+      console.log('🧹 Cleaned up old notification listeners');
+      
       // If Android and not using Firebase, use local notifications
       if (Platform.OS === 'android' && !API_CONFIG.USE_FIREBASE) {
         console.log('🔔 Using Expo local notifications for Android (no Firebase)');
@@ -634,6 +657,22 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
     try {
       // Fetch full order details from backend
       const orderId = notificationData.orderId;
+      
+      // Deduplicate: prevent processing the same notification multiple times
+      // This handles the case where both 'received' and 'response' listeners fire
+      const notificationKey = `${orderId}_${notificationData.timestamp || Date.now()}`;
+      if (recentNotificationsRef.current.has(notificationKey)) {
+        console.log('⏭️ Skipping duplicate notification for order:', orderId);
+        return;
+      }
+      
+      // Mark this notification as processed
+      recentNotificationsRef.current.add(notificationKey);
+      // Clean up after 10 seconds to prevent memory buildup
+      setTimeout(() => {
+        recentNotificationsRef.current.delete(notificationKey);
+      }, 10000);
+      
       console.log('📦 Handling new order notification for order ID:', orderId);
       const orderDetails = await fetchOrderDetails(orderId);
       console.log('📦 New order details fetched:', orderDetails);
