@@ -2,14 +2,14 @@
   "expo": {
     "name": "Littlekart Store Manager",
     "slug": "react-native-store-manager",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
       "icon": "./assets/icon.png",
       "supportsTablet": true,
-      "buildNumber": "1.0.2",
+      "buildNumber": "1.0.3",
        "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSCalendarsUsageDescription": "This app needs access to your calendar to manage events.",
