@@ -4,8 +4,8 @@ import {
   Text,
   StyleSheet,
   ScrollView,
-  SafeAreaView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useOrders, ORDER_STATUS } from '../context/OrdersContext';
 
 const StatsScreen = () => {

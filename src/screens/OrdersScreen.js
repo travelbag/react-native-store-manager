@@ -6,9 +6,9 @@ import {
   FlatList,
   TouchableOpacity,
   RefreshControl,
-  SafeAreaView,
   Alert,
 } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useOrders, ORDER_STATUS } from '../context/OrdersContext';
 import { useAuth } from '../context/AuthContext';
@@ -21,6 +21,7 @@ const OrdersScreen = ({ route, navigation }) => {
   const { manager, logout } = useAuth();
   const [selectedFilter, setSelectedFilter] = useState(ORDER_STATUS.PENDING);
   const [refreshing, setRefreshing] = useState(false);
+  const insets = useSafeAreaInsets();
 
   // Handle navigation parameter to set the selected tab
   React.useEffect(() => {
