@@ -154,14 +154,23 @@ const OrdersScreen = ({ route, navigation }) => {
     </View>
   );
 
+  const formatManagerName = (name) => {
+    const safeName = String(name || 'Manager');
+    if (safeName.length <= 11) return safeName;
+    return `${safeName.slice(0, 11)}...`;
+  };
+
 
   return (
   <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <View style={styles.headerMain}>
-          <Text style={styles.headerTitle}>Store Manager</Text>
-          <Text style={styles.headerSubtitle}>
-            {manager?.storeName || 'Store'} • {filteredOrders.length} {filteredOrders.length === 1 ? 'order' : 'orders'}
+          <Text style={styles.headerTitle} numberOfLines={1}>Store Manager</Text>
+          <Text style={styles.headerStoreName} numberOfLines={1}>
+            {manager?.storeName || 'Store'}
+          </Text>
+          <Text style={styles.headerOrders}>
+            {filteredOrders.length} {filteredOrders.length === 1 ? 'order' : 'orders'}
           </Text>
         </View>
         <View style={styles.headerActions}>
@@ -170,8 +179,12 @@ const OrdersScreen = ({ route, navigation }) => {
             onPress={() => navigation.navigate("Profile")}
           >
             <View style={styles.userInfo}>
-              <Text style={styles.userName}>{manager?.name || 'Manager'}</Text>
-              <Text style={styles.userRole}>{manager?.role || 'Store Manager'}</Text>
+              <Text style={styles.userName} numberOfLines={1}>
+                {formatManagerName(manager?.name)}
+              </Text>
+              <Text style={styles.userRole} numberOfLines={1}>
+                {manager?.role || 'Store Manager'}
+              </Text>
             </View>
             <Ionicons name="person-circle-outline" size={32} color="#007AFF" />
           </TouchableOpacity>
@@ -230,29 +243,39 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   headerTitle: {
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: 'bold',
     color: '#000000',
   },
-  headerSubtitle: {
+  headerStoreName: {
     fontSize: 16,
-    color: '#666666',
-    marginTop: 4,
+    color: '#353535',
+    marginTop: 6,
+  },
+  headerOrders: {
+    fontSize: 16,
+    color: '#FF3B30',
+    marginTop: 2,
   },
   headerActions: {
     marginLeft: 16,
+    width: 150,
   },
   userButton: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 8,
-    paddingHorizontal: 12,
+    paddingHorizontal: 8,
     backgroundColor: '#F8F9FA',
     borderRadius: 12,
+    width: '100%',
+    justifyContent: 'space-between',
   },
   userInfo: {
     marginRight: 8,
     alignItems: 'flex-end',
+    flex: 1,
+    minWidth: 0,
   },
   userName: {
     fontSize: 14,
@@ -338,3 +361,6 @@ const styles = StyleSheet.create({
 });
 
 export default OrdersScreen;
+
+
+
