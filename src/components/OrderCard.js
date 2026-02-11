@@ -7,6 +7,8 @@ import {
   Alert,
   Image,
   Linking,
+  Modal,
+  Pressable,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useOrders, ORDER_STATUS, ITEM_STATUS } from '../context/OrdersContext';
@@ -18,6 +20,8 @@ const OrderCard = ({ order }) => {
   const { updateOrderStatus, acceptOrder, rejectOrder, refreshOrders } = useOrders();
   const navigation = useNavigation();
   const { manager } = useAuth();
+  const [noDriverVisible, setNoDriverVisible] = React.useState(false);
+  const [isAssigningDriver, setIsAssigningDriver] = React.useState(false);
 
   // Map backend fields to frontend expected fields
   const orderId = order?.id || order?.orderId || '';
@@ -102,8 +106,10 @@ const OrderCard = ({ order }) => {
 
   const handleAssignDriver = async () => {
    // console.log('Assigning driver for order:', orderId);
+    if (isAssigningDriver) return;
     const storeId = manager?.storeId || manager?.store_id || '';
     try {
+      setIsAssigningDriver(true);
       await assignDriver(orderId, storeId);
       updateOrderStatus(orderId, ORDER_STATUS.ASSIGNED);
       // Pull fresh state from backend to reflect assigned driver across devices
@@ -112,7 +118,14 @@ const OrderCard = ({ order }) => {
       }
       Alert.alert('Success', 'Driver assigned successfully!');
     } catch (error) {
-      Alert.alert('Error', error.message || 'Failed to assign driver');
+      const message = error?.message || 'Failed to assign driver';
+      if (String(message).toLowerCase().includes('no drivers available')) {
+        setNoDriverVisible(true);
+        return;
+      }
+      Alert.alert('Error', message);
+    } finally {
+      setIsAssigningDriver(false);
     }
   };
 
@@ -176,11 +189,14 @@ const OrderCard = ({ order }) => {
       case 'ready':
         return (
           <TouchableOpacity 
-            style={styles.primaryButton} 
+            style={[styles.primaryButton, isAssigningDriver && styles.primaryButtonDisabled]}
             onPress={handleAssignDriver}
+            disabled={isAssigningDriver}
           >
             <Ionicons name="car-outline" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
-            <Text style={styles.primaryButtonText}>Assign Driver</Text>
+            <Text style={styles.primaryButtonText}>
+              {isAssigningDriver ? 'Assigning...' : 'Assign Driver'}
+            </Text>
           </TouchableOpacity>
         );
       
@@ -191,6 +207,27 @@ const OrderCard = ({ order }) => {
 
   return (
     <View style={styles.container}>
+      <Modal
+        animationType="fade"
+        transparent
+        visible={noDriverVisible}
+        onRequestClose={() => setNoDriverVisible(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setNoDriverVisible(false)}>
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <View style={styles.modalIcon}>
+              <Ionicons name="car-outline" size={26} color="#335CFF" />
+            </View>
+            <Text style={styles.modalTitle}>No drivers available</Text>
+            <Text style={styles.modalBody}>
+              We couldn't find an available driver right now. Try again in a few minutes.
+            </Text>
+            <TouchableOpacity style={styles.modalButton} onPress={() => setNoDriverVisible(false)}>
+              <Text style={styles.modalButtonText}>OK</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
       <View style={styles.header}>
         <View>
           <Text style={styles.orderId}>Order #{orderId}</Text>
@@ -450,9 +487,67 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     gap: 8,
   },
+  primaryButtonDisabled: {
+    opacity: 0.6,
+  },
   primaryButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
+    fontWeight: '600',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 320,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 20,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 6,
+  },
+  modalIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111111',
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  modalBody: {
+    fontSize: 14,
+    color: '#555555',
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  modalButton: {
+    backgroundColor: '#007AFF',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 24,
+    alignSelf: 'stretch',
+    alignItems: 'center',
+  },
+  modalButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
     fontWeight: '600',
   },
 });
