@@ -46,6 +46,28 @@ const OrderCard = ({ order }) => {
   const driverName = order?.driverName || '';
   const driverPhone = order?.driverPhone || '';
 
+  const isPrintItem = (item) => {
+    const rawType = String(item?.item_type || item?.type || '').toLowerCase();
+    return rawType === 'print' || Boolean(item?.fileUrl || item?.file_url || item?.printUrl || item?.print_url);
+  };
+
+  const getPrintFileName = (item) =>
+    item?.fileName || item?.file_name || item?.item_name || item?.name || 'Document';
+
+  const getPrintMeta = (item) => {
+    const pages = Number(item?.pages ?? item?.page_count ?? 1);
+    const quantity = Number(item?.quantity ?? 1);
+    const price = Number(item?.price ?? 0);
+    const colorMode = String(item?.colorMode || item?.color_mode || item?.print_color || '').toLowerCase();
+    const orientation = String(item?.orientation || item?.print_orientation || '').toLowerCase();
+    return {
+      pages: Number.isFinite(pages) && pages > 0 ? pages : 1,
+      quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+      price: Number.isFinite(price) ? price : 0,
+      colorMode: colorMode === 'black_white' || colorMode === 'bw' ? 'black_white' : 'color',
+      orientation: orientation === 'landscape' ? 'landscape' : 'portrait',
+    };
+  };
 
 
   const getStatusColor = (status) => {
@@ -245,12 +267,43 @@ const OrderCard = ({ order }) => {
         <Text style={styles.itemsTitle}>Items ({items.length})</Text>
         {items.slice(0, 3).map((item, index) => (
           <View key={index} style={styles.itemRow}>
-            <Image source={{ uri: item.image }} style={styles.itemImage} />
+            {isPrintItem(item) ? (
+              <View style={styles.printIcon}>
+                <Ionicons name="document-text-outline" size={20} color="#007AFF" />
+              </View>
+            ) : (
+              <Image source={{ uri: item.image }} style={styles.itemImage} />
+            )}
             <View style={styles.itemDetails}>
-              <Text style={styles.itemName}>{item.name}</Text>
+              <View style={styles.itemTitleRow}>
+                <Text style={styles.itemName}>
+                  {isPrintItem(item) ? getPrintFileName(item) : item.name}
+                </Text>
+                {isPrintItem(item) && (
+                  <View style={styles.printBadge}>
+                    <Text style={styles.printBadgeText}>PRINT</Text>
+                  </View>
+                )}
+              </View>
               <Text style={styles.itemPrice}>
-                {item.quantity} × ${item.price} = ${(item.quantity * item.price).toFixed(2)}
+                {(() => {
+                  if (isPrintItem(item)) {
+                    const meta = getPrintMeta(item);
+                    return `${meta.quantity} × $${meta.price} = $${(meta.quantity * meta.price).toFixed(2)}`;
+                  }
+                  const price = Number(item?.price ?? 0);
+                  const quantity = Number(item?.quantity ?? 0);
+                  return `${quantity} × $${price} = $${(quantity * price).toFixed(2)}`;
+                })()}
               </Text>
+              {isPrintItem(item) && (() => {
+                const meta = getPrintMeta(item);
+                return (
+                  <Text style={styles.printMeta}>
+                    {meta.pages} pages | {meta.colorMode === 'black_white' ? 'B/W' : 'Color'} | {meta.orientation}
+                  </Text>
+                );
+              })()}
             </View>
             {item.status === ITEM_STATUS.SCANNED && (
               <Ionicons name="checkmark-circle" size={20} color="#34C759" />
@@ -388,14 +441,45 @@ const styles = StyleSheet.create({
   itemDetails: {
     flex: 1,
   },
+  itemTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
   itemName: {
     fontSize: 14,
     fontWeight: '500',
     color: '#000000',
   },
+  printIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  printBadge: {
+    backgroundColor: '#EEF2FF',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  printBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#335CFF',
+  },
   itemPrice: {
     fontSize: 12,
     color: '#666666',
+    marginTop: 2,
+  },
+  printMeta: {
+    fontSize: 12,
+    color: '#007AFF',
     marginTop: 2,
   },
   moreItems: {

@@ -301,23 +301,83 @@ export function OrdersProvider({ children }) {
       }
     }
 
+    if ((!rawItems || rawItems.length === 0) && (Array.isArray(orderRaw.print_items) || Array.isArray(orderRaw.product_items))) {
+      rawItems = [
+        ...(Array.isArray(orderRaw.product_items) ? orderRaw.product_items : []),
+        ...(Array.isArray(orderRaw.print_items) ? orderRaw.print_items : []),
+      ];
+    }
+
     const items = rawItems
       .filter(Boolean)
       .map((item, idx) => {
-        const scanned = Boolean(item.scanned || item.status === ITEM_STATUS.SCANNED || item.status === 'scanned');
+        const rawType = String(item?.item_type || item?.type || '').toLowerCase();
+        const isPrintItem =
+          rawType === 'print' ||
+          Boolean(item?.file_url || item?.fileUrl || item?.print_url || item?.printUrl || item?.document_url || item?.documentUrl);
+        const rawStatus = String(item?.status || '').toLowerCase();
+        const scanned = Boolean(
+          item.scanned ||
+          rawStatus === ITEM_STATUS.SCANNED ||
+          rawStatus === 'scanned' ||
+          rawStatus === 'printed'
+        );
         const pickedQuantity = item.pickedQuantity ?? (scanned ? (item.quantity ?? 1) : undefined);
+
+        if (isPrintItem) {
+          const fileUrl =
+            item?.file_url ||
+            item?.fileUrl ||
+            item?.print_url ||
+            item?.printUrl ||
+            item?.document_url ||
+            item?.documentUrl ||
+            '';
+          const fileName =
+            item?.file_name ||
+            item?.fileName ||
+            item?.item_name ||
+            item?.name ||
+            'Document';
+          const pages = Number(item?.pages ?? item?.page_count ?? 1);
+          const quantity = Number(item?.quantity ?? 1);
+          const price = Number(item?.price ?? 0);
+          const colorMode = String(item?.color_mode || item?.colorMode || item?.print_color || item?.printColor || '').toLowerCase();
+          const orientation = String(item?.orientation || item?.print_orientation || item?.printOrientation || '').toLowerCase();
+
+          return {
+            id: item?.id ?? item?.item_id ?? item?.itemId ?? `${orderId}_print_${idx}`,
+            item_type: 'print',
+            type: 'print',
+            name: fileName,
+            fileName,
+            fileUrl,
+            printUrl: fileUrl,
+            pages: Number.isFinite(pages) && pages > 0 ? pages : 1,
+            quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+            price: Number.isFinite(price) ? price : 0,
+            colorMode: colorMode || 'color',
+            orientation: orientation === 'landscape' ? 'landscape' : 'portrait',
+            status: scanned ? ITEM_STATUS.SCANNED : (item.status && Object.values(ITEM_STATUS).includes(item.status) ? item.status : ITEM_STATUS.PENDING),
+            scannedAt: item.scannedAt ?? null,
+            pickedQuantity,
+          };
+        }
+
         return {
-          id: item.id ?? `${orderId}_item_${idx}`,
-          name: item.productName ?? item.name ?? '',
+          id: item.id ?? item.item_id ?? `${orderId}_item_${idx}`,
+          item_type: item.item_type ?? 'product',
+          type: item.type ?? 'product',
+          name: item.productName ?? item.item_name ?? item.name ?? '',
           price: parseFloat(item.price) || 0,
           quantity: item.quantity ?? 1,
-          barcode: item.barcode ?? '',
+          barcode: item.barcode ?? item.item_barcode ?? '',
           image: item.image ?? '',
           category: item.type ?? item.category ?? '',
           rack: item.rack ?? {},
           status: scanned ? ITEM_STATUS.SCANNED : (item.status && Object.values(ITEM_STATUS).includes(item.status) ? item.status : ITEM_STATUS.PENDING),
-          weight: item.weight ?? '',
-          mrp: item.mrp ?? '',
+          weight: item.weight ?? item.selectedWeight ?? '',
+          mrp: item.mrp ?? item.mrp_price ?? item.mrpPrice ?? '',
           scannedAt: item.scannedAt ?? null,
           pickedQuantity,
         };

@@ -7,13 +7,25 @@ import {
   TouchableOpacity,
   Alert,
   Image,
+  Modal,
+  Pressable,
+  Linking,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import * as Print from 'expo-print';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 import { useOrders, ITEM_STATUS, ORDER_STATUS } from '../context/OrdersContext';
 
 const OrderPickingScreen = ({ route, navigation }) => {
   const [allPickedOrUnavailable, setAllPickedOrUnavailable] = useState(false);
+  const [previewItem, setPreviewItem] = useState(null);
+  const [isPreviewVisible, setIsPreviewVisible] = useState(false);
+  const [isPrinting, setIsPrinting] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadingItemId, setDownloadingItemId] = useState(null);
   const { orderId } = route.params;
   const { orders, updateItemStatus, scanBarcode, markItemUnavailable, updateOrderStatus, markOrderReady, persistItemScan } = useOrders();
 
@@ -23,7 +35,15 @@ const OrderPickingScreen = ({ route, navigation }) => {
   // Get items array safely
   const items = React.useMemo(() => {
     if (!order?.items) return [];
-    const itemsArray = Array.isArray(order.items) ? order.items : JSON.parse(order.items);
+    const itemsArray = Array.isArray(order.items)
+      ? order.items
+      : (() => {
+          try {
+            return JSON.parse(order.items || '[]');
+          } catch {
+            return [];
+          }
+        })();
    // console.log('📋 OrderPickingScreen - Items updated:', itemsArray.map(item => ({ id: item.id, name: item.name, status: item.status })));
     return itemsArray;
   }, [order?.items]);
@@ -67,6 +87,169 @@ const OrderPickingScreen = ({ route, navigation }) => {
   const normalizeStatus = (status) => {
     if (!status) return '';
     return String(status).toLowerCase();
+  };
+
+  const isPrintItem = (item) => {
+    const rawType = String(item?.item_type || item?.type || '').toLowerCase();
+    return rawType === 'print' || Boolean(item?.fileUrl || item?.file_url || item?.printUrl || item?.print_url || item?.document_url || item?.documentUrl);
+  };
+
+  const getPrintFileUrl = (item) =>
+    item?.fileUrl ||
+    item?.file_url ||
+    item?.printUrl ||
+    item?.print_url ||
+    item?.document_url ||
+    item?.documentUrl ||
+    '';
+
+  const getPrintFileName = (item) =>
+    item?.fileName || item?.file_name || item?.item_name || item?.name || 'Document';
+
+  const getPrintMeta = (item) => {
+    const pages = Number(item?.pages ?? item?.page_count ?? 1);
+    const quantity = Number(item?.quantity ?? 1);
+    const price = Number(item?.price ?? 0);
+    const colorMode = String(item?.colorMode || item?.color_mode || item?.print_color || '').toLowerCase();
+    const orientation = String(item?.orientation || item?.print_orientation || '').toLowerCase();
+    return {
+      pages: Number.isFinite(pages) && pages > 0 ? pages : 1,
+      quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+      price: Number.isFinite(price) ? price : 0,
+      colorMode: colorMode === 'black_white' || colorMode === 'bw' ? 'black_white' : 'color',
+      orientation: orientation === 'landscape' ? 'landscape' : 'portrait',
+    };
+  };
+
+
+  const isImageUrl = (uri) => {
+    const clean = String(uri || '').split('?')[0].toLowerCase();
+    return /\.(png|jpg|jpeg|webp|gif)$/.test(clean);
+  };
+
+  const sanitizeFileName = (name) => String(name || 'document').replace(/[^a-zA-Z0-9._-]/g, '_');
+
+  const getFileExtension = (url) => {
+    const clean = String(url || '').split('?')[0];
+    const parts = clean.split('.');
+    return parts.length > 1 ? parts[parts.length - 1] : '';
+  };
+
+  const ensureLocalFile = async (url, fileName) => {
+    if (!url) throw new Error('File URL is missing');
+    if (url.startsWith('file://')) return url;
+    const safeName = sanitizeFileName(fileName);
+    const ext = getFileExtension(url);
+    const nameWithExt = ext && !safeName.toLowerCase().endsWith(`.${ext.toLowerCase()}`)
+      ? `${safeName}.${ext}`
+      : safeName;
+    const baseDir = FileSystem.documentDirectory || FileSystem.cacheDirectory;
+    if (!baseDir) throw new Error('No local storage available');
+    const localUri = `${baseDir}${Date.now()}_${nameWithExt}`;
+    const download = await FileSystem.downloadAsync(url, localUri);
+    return download.uri;
+  };
+
+  const openPrintPreview = (item) => {
+    setPreviewItem(item);
+    setIsPreviewVisible(true);
+  };
+
+  const closePrintPreview = () => {
+    setIsPreviewVisible(false);
+    setPreviewItem(null);
+  };
+
+  const markPrintDone = async (item) => {
+    const currentOrderId = order?.id || order?.orderId || orderId;
+    const itemId = item?.id;
+    if (!itemId) return;
+
+    const scannedAt = new Date().toISOString();
+    const pickedQty = Number(item?.quantity ?? 1);
+
+    try {
+      // optional backend persistence if your backend supports it
+      await persistItemScan(
+        currentOrderId,
+        item?.barcode || `PRINT_${itemId}`, // fallback fake reference for print item
+        pickedQty,
+        scannedAt,
+        itemId
+      );
+    } catch (e) {
+      console.warn('⚠️ Persist print completion failed, applying local state only:', e?.message);
+    }
+
+    // update local state instantly
+    updateItemStatus(currentOrderId, itemId, ITEM_STATUS.SCANNED, scannedAt, pickedQty);
+
+    setTimeout(checkOrderCompletion, 100);
+  };
+
+const handlePrintItem = async (item) => {
+    const url = getPrintFileUrl(item);
+    if (!url) {
+      Alert.alert('Print failed', 'No file URL found for this item.');
+      return;
+    }
+    setIsPrinting(true);
+    try {
+      const localUri = await ensureLocalFile(url, getPrintFileName(item));
+      closePrintPreview();
+      await Print.printAsync({ uri: localUri });
+      await markPrintDone(item);
+    } catch (e) {
+      Alert.alert('Print failed', e?.message || 'Unable to print this file.');
+    } finally {
+      setIsPrinting(false);
+    }
+  };
+
+  const handleDownloadItem = async (item, fromPreview = false) => {
+    const url = getPrintFileUrl(item);
+    if (!url) {
+      Alert.alert('Download failed', 'No file URL found for this item.');
+      return;
+    }
+    setDownloadingItemId(item?.id ?? null);
+    setIsDownloading(true);
+    try {
+      const localUri = await ensureLocalFile(url, getPrintFileName(item));
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(localUri);
+      }
+      if (fromPreview) {
+        closePrintPreview();
+      }
+      Alert.alert(
+        'Downloaded',
+        'File downloaded. Mark this item as printed?',
+        [
+          { text: 'Not yet', style: 'cancel' },
+          { text: 'Mark Printed', onPress: () => markPrintDone(item) },
+        ]
+      );
+    } catch (e) {
+      Alert.alert('Download failed', e?.message || 'Unable to download this file.');
+    } finally {
+      setIsDownloading(false);
+      setDownloadingItemId(null);
+    }
+  };
+
+  const openExternalPreview = async (url) => {
+    if (!url) return;
+    try {
+      const canOpen = await Linking.canOpenURL(url);
+      if (canOpen) {
+        await Linking.openURL(url);
+      } else {
+        Alert.alert('Preview not available', 'Unable to open this file.');
+      }
+    } catch (e) {
+      Alert.alert('Preview failed', 'Unable to open this file.');
+    }
   };
 
   // Helper to get readable status text
@@ -217,7 +400,7 @@ const checkOrderCompletion = () => {
   }
 };
 
-  const renderItemCard = ({ item }) => (
+  const renderItemCardLegacy = ({ item }) => (
     <View style={styles.itemCard}>
       <View style={styles.itemHeader}>
         <Image source={{ uri: item.image }} style={styles.itemImage} />
@@ -302,6 +485,160 @@ const checkOrderCompletion = () => {
     </View>
   );
 
+  const renderItemCard = ({ item }) => {
+    const printItem = isPrintItem(item);
+    const meta = printItem ? getPrintMeta(item) : null;
+    const displayName = printItem ? getPrintFileName(item) : item.name;
+    const displayCategory = printItem ? 'Print file' : item.category;
+    const barcodeValue = !printItem ? item.barcode : '';
+    const quantity = Number(item?.quantity ?? 0);
+    const price = Number(item?.price ?? 0);
+    const scannedLabel = printItem ? 'Just updated' : 'Just scanned';
+
+    return (
+      <View style={styles.itemCard}>
+        <View style={styles.itemHeader}>
+          {printItem ? (
+            <View style={styles.printItemIcon}>
+              <Ionicons name="document-text-outline" size={24} color="#007AFF" />
+            </View>
+          ) : (
+            <Image source={{ uri: item.image }} style={styles.itemImage} />
+          )}
+          <View style={styles.itemInfo}>
+            <Text style={styles.itemName}>{displayName}</Text>
+            <Text style={styles.itemCategory}>{displayCategory}</Text>
+            {printItem ? (
+              <>
+                <Text style={styles.itemDetails}>
+                  Pages: {meta.pages} | {meta.colorMode === 'black_white' ? 'B/W' : 'Color'} | {meta.orientation}
+                </Text>
+                <Text style={styles.itemDetails}>
+                  Qty: {meta.quantity} × ${meta.price} = ${(meta.quantity * meta.price).toFixed(2)}
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.itemDetails}>
+                  Qty: {quantity} × ${price} = ${(quantity * price).toFixed(2)}
+                </Text>
+                {barcodeValue ? <Text style={styles.barcode}>Barcode: {barcodeValue}</Text> : null}
+              </>
+            )}
+          </View>
+          <View style={[styles.statusBadge, { backgroundColor: getItemStatusColor(item.status) }]}>
+            <Ionicons
+              name={getItemStatusIcon(item.status)}
+              size={16}
+              color="#FFFFFF"
+            />
+          </View>
+        </View>
+
+        {!printItem && (
+          <View style={styles.rackInfo}>
+            <View style={styles.rackHeader}>
+              <Ionicons name="location" size={16} color="#007AFF" />
+              <Text style={styles.rackTitle}>Location: {item.rack?.location || 'N/A'}</Text>
+            </View>
+            <Text style={styles.rackAisle}>{item.rack?.aisle || 'N/A'}</Text>
+            <Text style={styles.rackDescription}>{item.rack?.description || 'N/A'}</Text>
+          </View>
+        )}
+
+        <View style={styles.itemActions}>
+          {printItem ? (
+            <>
+              <TouchableOpacity
+                style={[styles.printButton, item.status === ITEM_STATUS.SCANNED && styles.printButtonDisabled]}
+                onPress={() => openPrintPreview(item)}
+                disabled={item.status === ITEM_STATUS.SCANNED}
+              >
+                <Ionicons name="print-outline" size={16} color="#FFFFFF" />
+                <Text style={styles.buttonText}>{item.status === ITEM_STATUS.SCANNED ? 'Printed' : 'Print'}</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.downloadButton}
+                onPress={() => handleDownloadItem(item)}
+                disabled={isDownloading && downloadingItemId === item.id}
+              >
+                {isDownloading && downloadingItemId === item.id ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Ionicons name="download-outline" size={16} color="#FFFFFF" />
+                )}
+              </TouchableOpacity>
+
+              {item.status !== ITEM_STATUS.SCANNED && item.status !== ITEM_STATUS.UNAVAILABLE && (
+                <TouchableOpacity
+                  style={styles.scanButton}
+                  onPress={() => markPrintDone(item)}
+                >
+                  <Ionicons name="checkmark-done" size={16} color="#FFFFFF" />
+                  <Text style={styles.buttonText}>Mark Printed</Text>
+                </TouchableOpacity>
+              )}
+            </>
+          ) : (
+            <>
+              {item.status === ITEM_STATUS.PENDING && (
+                <TouchableOpacity
+                  style={styles.locateButton}
+                  onPress={() => handleLocateItem(item)}
+                >
+                  <Ionicons name="navigate" size={16} color="#FFFFFF" />
+                  <Text style={styles.buttonText}>Navigate</Text>
+                </TouchableOpacity>
+              )}
+
+              <TouchableOpacity
+                style={styles.scanButton}
+                onPress={() => handleScanItem(item)}
+              >
+                <Ionicons name="scan" size={16} color="#FFFFFF" />
+                <Text style={styles.buttonText}>Scan</Text>
+              </TouchableOpacity>
+            </>
+          )}
+
+          {item.status !== ITEM_STATUS.SCANNED && item.status !== ITEM_STATUS.UNAVAILABLE && (
+            <TouchableOpacity
+              style={styles.unavailableButton}
+              onPress={() => handleMarkUnavailable(item)}
+            >
+              <Ionicons name="close" size={16} color="#FFFFFF" />
+              <Text style={styles.buttonText}>{printItem ? 'Cannot Print' : 'Not Available'}</Text>
+            </TouchableOpacity>
+          )}
+
+          {item.status === ITEM_STATUS.SCANNED && (
+            <View style={styles.completedIndicator}>
+              <Ionicons name="checkmark-circle" size={20} color="#34C759" />
+              <Text style={styles.completedText}>
+                {printItem
+                  ? `Printed ${item.quantity || 1}`
+                  : `Picked ${item.pickedQuantity || item.quantity}/${item.quantity}`}
+              </Text>
+              <Text style={styles.scannedTimeText}>
+                {item.scannedAt ? new Date(item.scannedAt).toLocaleTimeString() : scannedLabel}
+              </Text>
+            </View>
+          )}
+
+          {item.status === ITEM_STATUS.UNAVAILABLE && (
+            <View style={styles.unavailableIndicator}>
+              <Ionicons name="close-circle" size={20} color="#FF3B30" />
+              <Text style={styles.unavailableText}>
+                {printItem ? 'Cannot Print' : 'Not Available'}
+              </Text>
+            </View>
+          )}
+        </View>
+      </View>
+    );
+  };
+
   if (!order) {
     return (
       <SafeAreaView style={styles.container}>
@@ -313,6 +650,8 @@ const checkOrderCompletion = () => {
   const scannedItems = safeItems.filter(item => item.status === ITEM_STATUS.SCANNED).length;
   const unavailableItems = safeItems.filter(item => item.status === ITEM_STATUS.UNAVAILABLE).length;
   const totalItems = safeItems.length;
+  const previewUrl = previewItem ? getPrintFileUrl(previewItem) : '';
+  const previewMeta = previewItem ? getPrintMeta(previewItem) : null;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -340,6 +679,85 @@ const checkOrderCompletion = () => {
           ]} 
         />
       </View>
+
+      <Modal
+        transparent
+        visible={isPreviewVisible}
+        animationType="fade"
+        onRequestClose={closePrintPreview}
+      >
+        <Pressable style={styles.previewBackdrop} onPress={closePrintPreview}>
+          <Pressable style={styles.previewCard} onPress={() => {}}>
+            <View style={styles.previewHeader}>
+              <Text style={styles.previewTitle}>Print Preview</Text>
+              <TouchableOpacity onPress={closePrintPreview}>
+                <Ionicons name="close" size={20} color="#111111" />
+              </TouchableOpacity>
+            </View>
+            {previewItem ? (
+              <>
+                <Text style={styles.previewFileName}>{getPrintFileName(previewItem)}</Text>
+                <View style={styles.previewBody}>
+                  {previewUrl && isImageUrl(previewUrl) ? (
+                    <Image source={{ uri: previewUrl }} style={styles.previewImage} resizeMode="contain" />
+                  ) : (
+                    <View style={styles.previewPlaceholder}>
+                      <Ionicons name="document-text-outline" size={44} color="#666666" />
+                      <Text style={styles.previewPlaceholderText}>Preview not available</Text>
+                      {previewUrl ? (
+                        <TouchableOpacity
+                          style={styles.previewLinkButton}
+                          onPress={() => openExternalPreview(previewUrl)}
+                        >
+                          <Ionicons name="open-outline" size={16} color="#007AFF" />
+                          <Text style={styles.previewLinkText}>Open Preview</Text>
+                        </TouchableOpacity>
+                      ) : null}
+                    </View>
+                  )}
+                </View>
+                {previewMeta ? (
+                  <View style={styles.previewMeta}>
+                    <Text style={styles.previewMetaText}>Pages: {previewMeta.pages}</Text>
+                    <Text style={styles.previewMetaText}>
+                      Color: {previewMeta.colorMode === 'black_white' ? 'B/W' : 'Color'}
+                    </Text>
+                    <Text style={styles.previewMetaText}>Orientation: {previewMeta.orientation}</Text>
+                  </View>
+                ) : null}
+                <View style={styles.previewActions}>
+                  <TouchableOpacity
+                    style={styles.previewPrintButton}
+                    onPress={() => handlePrintItem(previewItem)}
+                    disabled={isPrinting}
+                  >
+                    {isPrinting ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Ionicons name="print-outline" size={16} color="#FFFFFF" />
+                    )}
+                    <Text style={styles.previewActionText}>
+                      {isPrinting ? 'Printing...' : 'Print'}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.previewDownloadButton}
+                    onPress={() => handleDownloadItem(previewItem, true)}
+                    disabled={isDownloading}
+                  >
+                    {isDownloading ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Ionicons name="download-outline" size={16} color="#FFFFFF" />
+                    )}
+                    <Text style={styles.previewActionText}>Download</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : null}
+          </Pressable>
+        </Pressable>
+      </Modal>
 
 <FlatList
   data={safeItems}
@@ -475,6 +893,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     marginBottom: 12,
   },
+  printItemIcon: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
   itemImage: {
     width: 60,
     height: 60,
@@ -542,6 +969,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
     alignItems: 'center',
+    flexWrap: 'wrap',
   },
   locateButton: {
     flexDirection: 'row',
@@ -569,6 +997,26 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 6,
     gap: 4,
+  },
+  printButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#5856D6',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+    gap: 4,
+  },
+  printButtonDisabled: {
+    opacity: 0.6,
+  },
+  downloadButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0A84FF',
+    width: 34,
+    height: 34,
+    borderRadius: 8,
   },
   buttonText: {
     color: '#FFFFFF',
@@ -653,6 +1101,113 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 18,
     fontWeight: 'bold',
+  },
+  previewBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  previewCard: {
+    width: '100%',
+    maxWidth: 380,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+  },
+  previewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  previewTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111111',
+  },
+  previewFileName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333333',
+    marginBottom: 10,
+  },
+  previewBody: {
+    backgroundColor: '#F2F2F7',
+    borderRadius: 12,
+    padding: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 180,
+  },
+  previewImage: {
+    width: '100%',
+    height: 200,
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+  },
+  previewPlaceholder: {
+    alignItems: 'center',
+    gap: 8,
+  },
+  previewPlaceholderText: {
+    fontSize: 13,
+    color: '#666666',
+  },
+  previewLinkButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  previewLinkText: {
+    fontSize: 13,
+    color: '#007AFF',
+    fontWeight: '600',
+  },
+  previewMeta: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+  },
+  previewMetaText: {
+    fontSize: 12,
+    color: '#555555',
+  },
+  previewActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 16,
+  },
+  previewPrintButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#5856D6',
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  previewDownloadButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#0A84FF',
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  previewActionText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });
 
