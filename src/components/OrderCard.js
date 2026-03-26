@@ -289,11 +289,11 @@ const OrderCard = ({ order }) => {
                 {(() => {
                   if (isPrintItem(item)) {
                     const meta = getPrintMeta(item);
-                    return `${meta.quantity} × $${meta.price} = $${(meta.quantity * meta.price).toFixed(2)}`;
+                    return `${meta.quantity} × ₹${meta.price} = ₹${(meta.quantity * meta.price).toFixed(2)}`;
                   }
                   const price = Number(item?.price ?? 0);
                   const quantity = Number(item?.quantity ?? 0);
-                  return `${quantity} × $${price} = $${(quantity * price).toFixed(2)}`;
+                  return `${quantity} × ₹${price} = ₹${(quantity * price).toFixed(2)}`;
                 })()}
               </Text>
               {isPrintItem(item) && (() => {
@@ -320,7 +320,7 @@ const OrderCard = ({ order }) => {
       <View style={styles.orderInfo}>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>Total:</Text>
-          <Text style={styles.infoValue}>${total}</Text>
+          <Text style={styles.infoValue}>₹{total}</Text>
         </View>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>Address:</Text>

@@ -10,7 +10,7 @@ const OrdersContext = createContext();
 
 // Order statuses - simplified flow
 export const ORDER_STATUS = {
-  PENDING: 'pending',
+  PENDING: 'pending' || 'confirmed',
   ACCEPTED: 'accepted',
   READY: 'ready',
   ASSIGNED: 'assigned',
@@ -20,7 +20,7 @@ export const ORDER_STATUS = {
 
 // Item statuses for tracking individual product pickup
 export const ITEM_STATUS = {
-  PENDING: 'pending',
+  PENDING: 'pending' || 'confirmed',
   LOCATED: 'located',
   SCANNED: 'scanned',
   UNAVAILABLE: 'unavailable',

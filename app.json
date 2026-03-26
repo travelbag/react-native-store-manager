@@ -22,7 +22,7 @@
       "bundleIdentifier": "com.littlekart1.reactnativestoremanager"
     },
     "android": {
-      "versionCode": 7,
+      "versionCode": 9,
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#ffffff"

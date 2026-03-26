@@ -130,7 +130,7 @@ const StatsScreen = () => {
             />
             <StatCard
               title="Revenue Today"
-              value={`$${Number(stats.todayRevenue || 0).toFixed(2)}`}
+              value={`₹${Number(stats.todayRevenue || 0).toFixed(2)}`}
               subtitle="earnings"
               color="#FF9500"
             />
@@ -147,7 +147,7 @@ const StatsScreen = () => {
             />
             <StatCard
               title="Total Revenue"
-              value={`$${Number(stats.totalRevenue || 0).toFixed(2)}`}
+              value={`₹${Number(stats.totalRevenue || 0).toFixed(2)}`}
               subtitle="all time"
               color="#FF9500"
             />
@@ -201,7 +201,7 @@ const StatsScreen = () => {
             <View style={styles.metricItem}>
               <Text style={styles.metricLabel}>Average Order Value</Text>
               <Text style={styles.metricValue}>
-                ${stats.completedOrders > 0 
+                ₹{stats.completedOrders > 0 
                   ? (stats.totalRevenue / stats.completedOrders).toFixed(2)
                   : '0.00'
                 }
