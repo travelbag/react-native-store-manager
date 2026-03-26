@@ -6,11 +6,13 @@ import { ActivityIndicator, View, StyleSheet } from 'react-native';
 
 import LoginScreen from '../screens/LoginScreen';
 import TabNavigator from './TabNavigator';
+import { useSessionRefresh } from '../hooks/useSessionRefresh';
 
 const Stack = createStackNavigator();
 
 const AuthNavigator = () => {
   const { isAuthenticated, isLoading } = useAuth();
+  useSessionRefresh({ auto: true, enabled: !isLoading });
 
   // Show loading spinner while checking auth state
   if (isLoading) {

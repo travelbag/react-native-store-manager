@@ -2,7 +2,8 @@ import React, { createContext, useContext, useReducer, useEffect } from 'react';
 import * as Notifications from 'expo-notifications';
 import { Platform, AppState } from 'react-native';
 import NotificationService from '../services/NotificationService';
-import { API_CONFIG, buildApiUrl } from '../config/api';
+import { API_CONFIG } from '../config/api';
+import { apiClient } from '../services/apiClient';
 import { useAuth } from './AuthContext';
 
 const OrdersContext = createContext();
@@ -265,7 +266,7 @@ function generateSampleGroceryOrder() {
 
 export function OrdersProvider({ children }) {
   const [state, dispatch] = useReducer(ordersReducer, initialState);
-  const { isAuthenticated, manager, getAuthHeaders } = useAuth();
+  const { isAuthenticated, manager } = useAuth();
   const [demoInterval, setDemoInterval] = React.useState(null);
   // Use ref for polling interval to avoid stale closures and duplicate timers
   const syncIntervalRef = React.useRef(null);
@@ -435,9 +436,8 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
     console.error('❌ No storeId found for manager');
     return [];
   }
-  let url = buildApiUrl(`/orders/by-store/${manager.storeId}`);
-  //console.log('Fetching orders from DB with URL:', url);
-  if (status) url += `?status=${status}`;
+  let endpoint = `/orders/by-store/${manager.storeId}`;
+  if (status) endpoint += `?status=${status}`;
   try {
     if (__DEV__ && source === 'interval') {
       // Keep logs light to avoid noisy console during polling; only tag interval
@@ -445,7 +445,7 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
       const diff = lastFetchAtRef.current ? (now - lastFetchAtRef.current) : 0;
       console.debug(`📡 (poll) Fetching orders from DB • +${diff}ms`);
     }
-    const response = await fetch(url, { headers: getAuthHeaders() });
+    const response = await apiClient.get(endpoint);
     const data = await response.json();
    
 
@@ -597,18 +597,16 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
       const endpoint = API_CONFIG.ENDPOINTS.REGISTER_TOKEN.replace('{id}', manager.id);
       // Results in: /store-managers/SM_001/register-token
 
-      const response = await fetch(buildApiUrl(endpoint), {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({
+      const response = await apiClient.post(endpoint, {
+        body: {
           storeManagerId: manager.id,
           storeId: manager.storeId,
           pushToken: pushToken,
           deviceInfo: {
             platform: Platform.OS,
             timestamp: new Date().toISOString(),
-          }
-        }),
+          },
+        },
       });
 
       if (response.ok) {
@@ -659,10 +657,9 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
   // Fetch order details from backend
   const fetchOrderDetails = async (orderId) => {
     try {
-      const response = await fetch(buildApiUrl(API_CONFIG.ENDPOINTS.ORDER_DETAILS, `/${orderId}`), {
-        headers: getAuthHeaders(),
-      });
-      console.log(buildApiUrl(API_CONFIG.ENDPOINTS.ORDER_DETAILS, `/${orderId}`));
+      const endpoint = `${API_CONFIG.ENDPOINTS.ORDER_DETAILS}/${orderId}`;
+      const response = await apiClient.get(endpoint);
+      console.log(endpoint);
       console.log('📦 Fetching order details for order ID:', orderId, 'Response status:', response.status);
       if (response.ok) {
         const result = await response.json();
@@ -705,12 +702,10 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
   const acceptOrder = async (orderId) => {
     console.log('✅ Accepting order ID:', orderId);
     try {
-      console.log('🔄 Sending accept order request to backend...',buildApiUrl(`/orders/${orderId}/status`));
+      console.log('🔄 Sending accept order request to backend...', `/orders/${orderId}/status`);
       // Update backend
-      const response = await fetch(buildApiUrl(`/orders/${orderId}/status`), {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ status: ORDER_STATUS.ACCEPTED }),
+      const response = await apiClient.put(`/orders/${orderId}/status`, {
+        body: { status: ORDER_STATUS.ACCEPTED },
       });
       
       console.log('🔄 Accept order API response status:', response.status);
@@ -737,10 +732,8 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
     console.log('❌ Rejecting order ID:', orderId);
     try {
       // Update backend
-      const response = await fetch(buildApiUrl(`/orders/${orderId}/status`), {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ status: ORDER_STATUS.REJECTED }),
+      const response = await apiClient.put(`/orders/${orderId}/status`, {
+        body: { status: ORDER_STATUS.REJECTED },
       });
       
       console.log('🔄 Reject order API response status:', response.status);
@@ -772,10 +765,8 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
       const endpoint = `${API_CONFIG.ENDPOINTS.UPDATE_ITEM_SCAN}/${orderId}/items/${encodeURIComponent(barcode)}/scan`;
       
       console.log('🔄 Persisting item scan to backend:', { orderId, barcode, pickedQuantity, scannedAt, itemId });
-      const res = await fetch(buildApiUrl(endpoint), {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ scanned: true, pickedQuantity, scannedAt, itemId }),
+      const res = await apiClient.put(endpoint, {
+        body: { scanned: true, pickedQuantity, scannedAt, itemId },
       });
       if (!res.ok) {
         const t = await res.text();
@@ -831,10 +822,8 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
     
     try {
       // 1) Update backend first
-      const response = await fetch(buildApiUrl(`/orders/${orderId}/status`), {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ status: ORDER_STATUS.READY }),
+      const response = await apiClient.put(`/orders/${orderId}/status`, {
+        body: { status: ORDER_STATUS.READY },
       });
       
       console.log('🔄 Mark ready API response status:', response.status);

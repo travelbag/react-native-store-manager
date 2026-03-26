@@ -1,16 +1,24 @@
-import React, { createContext, useContext, useReducer, useEffect } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { API_CONFIG, buildApiUrl } from '../config/api';
+import React, { createContext, useCallback, useContext, useEffect, useReducer } from 'react';
+import { API_CONFIG } from '../config/api';
+import {
+  clearAuthSession,
+  getAuthSession,
+  hydrateAuthSession,
+  isAccessTokenStale,
+  refreshAuthSession,
+  subscribeToAuthSession,
+  updateAuthSessionManager,
+  writeAuthSession,
+} from '../auth/authSession';
+import { apiClient } from '../services/apiClient';
 
 const AuthContext = createContext();
 
 // Auth states
 const AUTH_ACTIONS = {
   SET_LOADING: 'SET_LOADING',
-  LOGIN_SUCCESS: 'LOGIN_SUCCESS',
-  LOGIN_FAILURE: 'LOGIN_FAILURE',
-  LOGOUT: 'LOGOUT',
-  SET_MANAGER: 'SET_MANAGER',
+  SET_SESSION: 'SET_SESSION',
+  SET_ERROR: 'SET_ERROR',
 };
 
 const initialState = {
@@ -25,43 +33,19 @@ function authReducer(state, action) {
   switch (action.type) {
     case AUTH_ACTIONS.SET_LOADING:
       return { ...state, isLoading: action.payload };
-    
-    case AUTH_ACTIONS.LOGIN_SUCCESS:
+
+    case AUTH_ACTIONS.SET_SESSION:
       return {
         ...state,
-        isAuthenticated: true,
-        isLoading: false,
-        token: action.payload.token,
-        manager: action.payload.manager,
+        isAuthenticated: Boolean(action.payload.accessToken && action.payload.manager),
+        token: action.payload.accessToken ?? null,
+        manager: action.payload.manager ?? null,
         error: null,
       };
-    
-    case AUTH_ACTIONS.LOGIN_FAILURE:
-      return {
-        ...state,
-        isAuthenticated: false,
-        isLoading: false,
-        token: null,
-        manager: null,
-        error: action.payload,
-      };
-    
-    case AUTH_ACTIONS.LOGOUT:
-      return {
-        ...state,
-        isAuthenticated: false,
-        isLoading: false,
-        token: null,
-        manager: null,
-        error: null,
-      };
-    
-    case AUTH_ACTIONS.SET_MANAGER:
-      return {
-        ...state,
-        manager: action.payload,
-      };
-    
+
+    case AUTH_ACTIONS.SET_ERROR:
+      return { ...state, error: action.payload };
+
     default:
       return state;
   }
@@ -70,15 +54,88 @@ function authReducer(state, action) {
 export function AuthProvider({ children, logoutHandlerRef }) {
   const [state, dispatch] = useReducer(authReducer, initialState);
 
-  useEffect(() => {
-    checkStoredAuth();
-    
-    // Set up periodic token expiration check every minute
-    const tokenCheckInterval = setInterval(() => {
-      checkTokenExpiration();
-    }, 60000); // Check every 60 seconds
+  const syncSessionState = useCallback((session) => {
+    dispatch({
+      type: AUTH_ACTIONS.SET_SESSION,
+      payload: session,
+    });
+  }, []);
 
-    return () => clearInterval(tokenCheckInterval);
+  const hydrateAuth = useCallback(async () => {
+    dispatch({ type: AUTH_ACTIONS.SET_LOADING, payload: true });
+
+    try {
+      const hydratedSession = await hydrateAuthSession();
+      syncSessionState(hydratedSession);
+
+      if (hydratedSession.accessToken && isAccessTokenStale()) {
+        const refreshedToken = await refreshAuthSession({ force: false });
+        if (!refreshedToken) {
+          dispatch({ type: AUTH_ACTIONS.SET_ERROR, payload: 'Session expired. Please sign in again.' });
+        }
+      }
+    } catch (error) {
+      console.error('Error hydrating auth:', error);
+    } finally {
+      dispatch({ type: AUTH_ACTIONS.SET_LOADING, payload: false });
+    }
+  }, [syncSessionState]);
+
+  useEffect(() => {
+    syncSessionState(getAuthSession());
+    const unsubscribe = subscribeToAuthSession(syncSessionState);
+    hydrateAuth();
+
+    return unsubscribe;
+  }, [hydrateAuth, syncSessionState]);
+
+  const login = useCallback(async (username, password) => {
+    dispatch({ type: AUTH_ACTIONS.SET_LOADING, payload: true });
+
+    try {
+      const response = await apiClient.post(API_CONFIG.ENDPOINTS.LOGIN, {
+        requiresAuth: false,
+        retryOn401: false,
+        body: { username, password },
+      });
+
+      const data = await response.json();
+      console.log('Login response data:', data);
+
+      if (response.ok) {
+        await writeAuthSession({
+          accessToken: data.token || data.accessToken || data.authToken,
+          refreshToken: data.refreshToken ?? null,
+          manager: data.manager ?? null,
+        });
+
+        return { success: true, manager: data.manager };
+      }
+
+      const errorMessage = data.message || 'Login failed';
+      dispatch({ type: AUTH_ACTIONS.SET_ERROR, payload: errorMessage });
+      return { success: false, error: errorMessage };
+    } catch (error) {
+      console.error('Login error:', error);
+      const errorMessage = 'Network error. Please check your connection.';
+      dispatch({ type: AUTH_ACTIONS.SET_ERROR, payload: errorMessage });
+      return { success: false, error: errorMessage };
+    } finally {
+      dispatch({ type: AUTH_ACTIONS.SET_LOADING, payload: false });
+    }
+  }, []);
+
+  const logout = useCallback(async () => {
+    dispatch({ type: AUTH_ACTIONS.SET_LOADING, payload: true });
+    try {
+      await clearAuthSession();
+    } finally {
+      dispatch({ type: AUTH_ACTIONS.SET_LOADING, payload: false });
+    }
+  }, []);
+
+  const updateManager = useCallback(async (managerData) => {
+    await updateAuthSessionManager(managerData);
   }, []);
 
   // Expose logout function to parent via ref
@@ -86,206 +143,13 @@ export function AuthProvider({ children, logoutHandlerRef }) {
     if (logoutHandlerRef) {
       logoutHandlerRef.current = logout;
     }
-  }, []);
-
-  // Check if current token is expired and logout if needed
-  const checkTokenExpiration = async () => {
-    try {
-      const token = await AsyncStorage.getItem('authToken');
-      if (token && state.isAuthenticated) {
-        const isValid = await verifyToken(token);
-        if (!isValid) {
-          console.log('⏰ Token expired - logging out');
-          await logout();
-        }
-      }
-    } catch (error) {
-      console.error('Error checking token expiration:', error);
-    }
-  };
-
-  // Check if user is already logged in
-  const checkStoredAuth = async () => {
-    try {
-      const token = await AsyncStorage.getItem('authToken');
-      const managerData = await AsyncStorage.getItem('managerData');
-      
-      if (token && managerData) {
-        const manager = JSON.parse(managerData);
-        
-        // Verify token is still valid
-        const isValid = await verifyToken(token);
-        if (isValid) {
-          dispatch({
-            type: AUTH_ACTIONS.LOGIN_SUCCESS,
-            payload: { token, manager }
-          });
-        } else {
-          await clearStoredAuth();
-          dispatch({ type: AUTH_ACTIONS.SET_LOADING, payload: false });
-        }
-      } else {
-        dispatch({ type: AUTH_ACTIONS.SET_LOADING, payload: false });
-      }
-    } catch (error) {
-      console.error('Error checking stored auth:', error);
-      dispatch({ type: AUTH_ACTIONS.SET_LOADING, payload: false });
-    }
-  };
-
-  // Verify token with backend
-  const verifyToken = async (token) => {
-    try {
-      // For now, just check if token exists and is not expired
-      // In production, you would verify with your backend
-      if (!token) return false;
-      
-      // Simple JWT expiry check (if using JWT)
-      try {
-        const parts = token.split('.');
-        if (parts.length === 3) {
-          const payload = JSON.parse(atob(parts[1]));
-          const currentTime = Math.floor(Date.now() / 1000);
-          const isValid = payload.exp > currentTime;
-          
-          if (!isValid) {
-            console.log('🔒 JWT token expired at:', new Date(payload.exp * 1000).toISOString());
-          }
-          
-          return isValid;
-        }
-      } catch (e) {
-        // If not JWT, just return true for now
-        return true;
-      }
-      
-      return true;
-    } catch (error) {
-      console.error('Token verification failed:', error);
-      return false;
-    }
-  };
-
-  // Login function
-  const login = async (username, password) => {
-    dispatch({ type: AUTH_ACTIONS.SET_LOADING, payload: true });
-    
-    try {
-    //   // Demo mode login for testing
-    //   if (API_CONFIG.DEMO_MODE && username === 'admin' && password === 'admin123') {
-    //     const mockManager = {
-    //       id: 'SM_001',
-    //       name: 'John Manager',
-    //       username: 'admin',
-    //       storeId: 'STORE_001',
-    //       storeName: 'Downtown Grocery',
-    //       role: 'manager'
-    //     };
-
-    //     const mockToken = 'demo_token_' + Date.now();
-
-    //     // Store auth data
-    //     await AsyncStorage.setItem('authToken', mockToken);
-    //     await AsyncStorage.setItem('managerData', JSON.stringify(mockManager));
-        
-    //     dispatch({
-    //       type: AUTH_ACTIONS.LOGIN_SUCCESS,
-    //       payload: {
-    //         token: mockToken,
-    //         manager: mockManager
-    //       }
-    //     });
-
-    //     return { success: true, manager: mockManager };
-    //   }
-   console.log(buildApiUrl(API_CONFIG.ENDPOINTS.LOGIN));
-    //console.log(JSON.stringify({ username, password }))
-
-      // Real API login
-      const response = await fetch(buildApiUrl(API_CONFIG.ENDPOINTS.LOGIN), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ username, password }),
-      });
-
-      const data = await response.json();
-       console.log('Login response data:', data);
-      if (response.ok) {
-        // Store auth data
-        await AsyncStorage.setItem('authToken', data.token);
-        await AsyncStorage.setItem('managerData', JSON.stringify(data.manager));
-        
-        // Store refresh token if provided by backend
-        if (data.refreshToken) {
-          await AsyncStorage.setItem('refreshToken', data.refreshToken);
-        }
-        
-        dispatch({
-          type: AUTH_ACTIONS.LOGIN_SUCCESS,
-          payload: {
-            token: data.token,
-            manager: data.manager
-          }
-        });
-
-        return { success: true, manager: data.manager };
-      } else {
-        dispatch({
-          type: AUTH_ACTIONS.LOGIN_FAILURE,
-          payload: data.message || 'Login failed'
-        });
-        return { success: false, error: data.message || 'Login failed' };
-      }
-    } catch (error) {
-      console.error('Login error:', error);
-      const errorMessage = 'Network error. Please check your connection.';
-      dispatch({
-        type: AUTH_ACTIONS.LOGIN_FAILURE,
-        payload: errorMessage
-      });
-      return { success: false, error: errorMessage };
-    }
-  };
-
-  // Logout function
-  const logout = async () => {
-    await clearStoredAuth();
-    dispatch({ type: AUTH_ACTIONS.LOGOUT });
-  };
-
-  // Clear stored authentication data
-  const clearStoredAuth = async () => {
-    try {
-      await AsyncStorage.multiRemove(['authToken', 'refreshToken', 'managerData']);
-    } catch (error) {
-      console.error('Error clearing stored auth:', error);
-    }
-  };
-
-  // Get auth headers for API requests
-  const getAuthHeaders = () => {
-    return {
-      'Content-Type': 'application/json',
-      ...(state.token && { 'Authorization': `Bearer ${state.token}` }),
-    };
-  };
-
-  // Update manager data
-  const updateManager = async (managerData) => {
-    await AsyncStorage.setItem('managerData', JSON.stringify(managerData));
-    dispatch({
-      type: AUTH_ACTIONS.SET_MANAGER,
-      payload: managerData
-    });
-  };
+  }, [logout, logoutHandlerRef]);
 
   const value = {
     ...state,
     login,
     logout,
-    getAuthHeaders,
+    refreshSession: refreshAuthSession,
     updateManager,
   };
 

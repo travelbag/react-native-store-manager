@@ -14,7 +14,6 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
-import { API_CONFIG } from '../config/api';
 
 const LoginScreen = ({ navigation }) => {
   const [username, setUsername] = useState(__DEV__ ? 'Store-1' : '');
@@ -130,13 +129,6 @@ const LoginScreen = ({ navigation }) => {
 
           {/* Footer */}
           <View style={styles.footer}>
-            {__DEV__ && (
-              <View style={styles.devInfo}>
-                <Text style={styles.devTitle}>Development Mode</Text>
-                <Text style={styles.devText}>Test credentials: admin / admin123</Text>
-                <Text style={styles.devText}>Backend: {API_CONFIG.BASE_URL}</Text>
-              </View>
-            )}
             <Text style={styles.footerText}>
               Need help? Contact your store administrator
             </Text>

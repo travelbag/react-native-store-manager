@@ -2,6 +2,7 @@ import React from "react";
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
+import { apiClient } from "../services/apiClient";
 
 const ProfileScreen = ({ navigation }) => {
   const { manager, logout } = useAuth();
@@ -15,27 +16,24 @@ const ProfileScreen = ({ navigation }) => {
         { 
           text: 'Sign Out', 
           style: 'destructive',
-          onPress: () => {
-            // Call the function to remove the push token here
-            removePushTokenOnLogout(manager.id, manager.storeId, manager.pushToken);
-            logout();
+          onPress: async () => {
+            await removePushTokenOnLogout(manager?.id, manager?.storeId, manager?.pushToken);
+            await logout();
           },
         },
       ]
     );
   };
 
-  // Call this when logging out
   async function removePushTokenOnLogout(storeManagerId, storeId, pushToken) {
+    if (!storeManagerId || !storeId || !pushToken) {
+      return;
+    }
+
     try {
-      const response = await fetch(
-        `https://ubgukf7hdu.us-east-1.awsapprunner.com/api/store-managers/${storeManagerId}/remove-token`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ storeId, pushToken }),
-        }
-      );
+      const response = await apiClient.post(`/store-managers/${storeManagerId}/remove-token`, {
+        body: { storeId, pushToken },
+      });
       const result = await response.json();
       if (response.ok) {
         console.log('Push token removed:', result.message);
@@ -58,14 +56,9 @@ const ProfileScreen = ({ navigation }) => {
           style: "destructive",
           onPress: async () => {
             try {
-              const res = await fetch(
-                "https://ubgukf7hdu.us-east-1.awsapprunner.com/api/store-managers/deleteaccount",
-                {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ managerId: manager.id }),
-                }
-              );
+              const res = await apiClient.post("/store-managers/deleteaccount", {
+                body: { managerId: manager.id },
+              });
 
               const data = await res.json();
 
@@ -83,28 +76,6 @@ const ProfileScreen = ({ navigation }) => {
       ]
     );
   };
-
-  // Call this when logging out
-  async function removePushTokenOnLogout(storeManagerId, storeId, pushToken) {
-    try {
-      const response = await fetch(
-        `https://ubgukf7hdu.us-east-1.awsapprunner.com/api/store-managers/${storeManagerId}/remove-token`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ storeId, pushToken }),
-        }
-      );
-      const result = await response.json();
-      if (response.ok) {
-        console.log('Push token removed:', result.message);
-      } else {
-        console.warn('Failed to remove push token:', result.message);
-      }
-    } catch (e) {
-      console.error('Error removing push token:', e);
-    }
-  }
 
   return (
     <View style={styles.container}>

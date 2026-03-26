@@ -33,14 +33,6 @@ export const API_CONFIG = {
   POLL_INTERVAL: 5000,
 };
 
-// Helper function to get headers with authentication (deprecated - use AuthContext.getAuthHeaders instead)
-export const getAuthHeaders = () => {
-  console.warn('getAuthHeaders from api.js is deprecated. Use AuthContext.getAuthHeaders instead');
-  return {
-    'Content-Type': 'application/json',
-  };
-};
-
 // Helper function to build API URL
 export const buildApiUrl = (endpoint, params = '') => {
   return `${API_CONFIG.BASE_URL}${endpoint}${params}`;
