@@ -7,6 +7,8 @@ import {
   Alert,
   Image,
   Linking,
+  Modal,
+  Pressable,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useOrders, ORDER_STATUS, ITEM_STATUS } from '../context/OrdersContext';
@@ -18,6 +20,8 @@ const OrderCard = ({ order }) => {
   const { updateOrderStatus, acceptOrder, rejectOrder, refreshOrders } = useOrders();
   const navigation = useNavigation();
   const { manager } = useAuth();
+  const [noDriverVisible, setNoDriverVisible] = React.useState(false);
+  const [isAssigningDriver, setIsAssigningDriver] = React.useState(false);
 
   // Map backend fields to frontend expected fields
   const orderId = order?.id || order?.orderId || '';
@@ -42,6 +46,28 @@ const OrderCard = ({ order }) => {
   const driverName = order?.driverName || '';
   const driverPhone = order?.driverPhone || '';
 
+  const isPrintItem = (item) => {
+    const rawType = String(item?.item_type || item?.type || '').toLowerCase();
+    return rawType === 'print' || Boolean(item?.fileUrl || item?.file_url || item?.printUrl || item?.print_url);
+  };
+
+  const getPrintFileName = (item) =>
+    item?.fileName || item?.file_name || item?.item_name || item?.name || 'Document';
+
+  const getPrintMeta = (item) => {
+    const pages = Number(item?.pages ?? item?.page_count ?? 1);
+    const quantity = Number(item?.quantity ?? 1);
+    const price = Number(item?.price ?? 0);
+    const colorMode = String(item?.colorMode || item?.color_mode || item?.print_color || '').toLowerCase();
+    const orientation = String(item?.orientation || item?.print_orientation || '').toLowerCase();
+    return {
+      pages: Number.isFinite(pages) && pages > 0 ? pages : 1,
+      quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+      price: Number.isFinite(price) ? price : 0,
+      colorMode: colorMode === 'black_white' || colorMode === 'bw' ? 'black_white' : 'color',
+      orientation: orientation === 'landscape' ? 'landscape' : 'portrait',
+    };
+  };
 
 
   const getStatusColor = (status) => {
@@ -102,8 +128,10 @@ const OrderCard = ({ order }) => {
 
   const handleAssignDriver = async () => {
    // console.log('Assigning driver for order:', orderId);
+    if (isAssigningDriver) return;
     const storeId = manager?.storeId || manager?.store_id || '';
     try {
+      setIsAssigningDriver(true);
       await assignDriver(orderId, storeId);
       updateOrderStatus(orderId, ORDER_STATUS.ASSIGNED);
       // Pull fresh state from backend to reflect assigned driver across devices
@@ -112,7 +140,14 @@ const OrderCard = ({ order }) => {
       }
       Alert.alert('Success', 'Driver assigned successfully!');
     } catch (error) {
-      Alert.alert('Error', error.message || 'Failed to assign driver');
+      const message = error?.message || 'Failed to assign driver';
+      if (String(message).toLowerCase().includes('no drivers available')) {
+        setNoDriverVisible(true);
+        return;
+      }
+      Alert.alert('Error', message);
+    } finally {
+      setIsAssigningDriver(false);
     }
   };
 
@@ -176,11 +211,14 @@ const OrderCard = ({ order }) => {
       case 'ready':
         return (
           <TouchableOpacity 
-            style={styles.primaryButton} 
+            style={[styles.primaryButton, isAssigningDriver && styles.primaryButtonDisabled]}
             onPress={handleAssignDriver}
+            disabled={isAssigningDriver}
           >
             <Ionicons name="car-outline" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
-            <Text style={styles.primaryButtonText}>Assign Driver</Text>
+            <Text style={styles.primaryButtonText}>
+              {isAssigningDriver ? 'Assigning...' : 'Assign Driver'}
+            </Text>
           </TouchableOpacity>
         );
       
@@ -191,6 +229,27 @@ const OrderCard = ({ order }) => {
 
   return (
     <View style={styles.container}>
+      <Modal
+        animationType="fade"
+        transparent
+        visible={noDriverVisible}
+        onRequestClose={() => setNoDriverVisible(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setNoDriverVisible(false)}>
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <View style={styles.modalIcon}>
+              <Ionicons name="car-outline" size={26} color="#335CFF" />
+            </View>
+            <Text style={styles.modalTitle}>No drivers available</Text>
+            <Text style={styles.modalBody}>
+              We couldn't find an available driver right now. Try again in a few minutes.
+            </Text>
+            <TouchableOpacity style={styles.modalButton} onPress={() => setNoDriverVisible(false)}>
+              <Text style={styles.modalButtonText}>OK</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
       <View style={styles.header}>
         <View>
           <Text style={styles.orderId}>Order #{orderId}</Text>
@@ -208,12 +267,43 @@ const OrderCard = ({ order }) => {
         <Text style={styles.itemsTitle}>Items ({items.length})</Text>
         {items.slice(0, 3).map((item, index) => (
           <View key={index} style={styles.itemRow}>
-            <Image source={{ uri: item.image }} style={styles.itemImage} />
+            {isPrintItem(item) ? (
+              <View style={styles.printIcon}>
+                <Ionicons name="document-text-outline" size={20} color="#007AFF" />
+              </View>
+            ) : (
+              <Image source={{ uri: item.image }} style={styles.itemImage} />
+            )}
             <View style={styles.itemDetails}>
-              <Text style={styles.itemName}>{item.name}</Text>
+              <View style={styles.itemTitleRow}>
+                <Text style={styles.itemName}>
+                  {isPrintItem(item) ? getPrintFileName(item) : item.name}
+                </Text>
+                {isPrintItem(item) && (
+                  <View style={styles.printBadge}>
+                    <Text style={styles.printBadgeText}>PRINT</Text>
+                  </View>
+                )}
+              </View>
               <Text style={styles.itemPrice}>
-                {item.quantity} × ${item.price} = ${(item.quantity * item.price).toFixed(2)}
+                {(() => {
+                  if (isPrintItem(item)) {
+                    const meta = getPrintMeta(item);
+                    return `${meta.quantity} × $${meta.price} = $${(meta.quantity * meta.price).toFixed(2)}`;
+                  }
+                  const price = Number(item?.price ?? 0);
+                  const quantity = Number(item?.quantity ?? 0);
+                  return `${quantity} × $${price} = $${(quantity * price).toFixed(2)}`;
+                })()}
               </Text>
+              {isPrintItem(item) && (() => {
+                const meta = getPrintMeta(item);
+                return (
+                  <Text style={styles.printMeta}>
+                    {meta.pages} pages | {meta.colorMode === 'black_white' ? 'B/W' : 'Color'} | {meta.orientation}
+                  </Text>
+                );
+              })()}
             </View>
             {item.status === ITEM_STATUS.SCANNED && (
               <Ionicons name="checkmark-circle" size={20} color="#34C759" />
@@ -351,14 +441,45 @@ const styles = StyleSheet.create({
   itemDetails: {
     flex: 1,
   },
+  itemTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
   itemName: {
     fontSize: 14,
     fontWeight: '500',
     color: '#000000',
   },
+  printIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  printBadge: {
+    backgroundColor: '#EEF2FF',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  printBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#335CFF',
+  },
   itemPrice: {
     fontSize: 12,
     color: '#666666',
+    marginTop: 2,
+  },
+  printMeta: {
+    fontSize: 12,
+    color: '#007AFF',
     marginTop: 2,
   },
   moreItems: {
@@ -450,9 +571,67 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     gap: 8,
   },
+  primaryButtonDisabled: {
+    opacity: 0.6,
+  },
   primaryButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
+    fontWeight: '600',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 320,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 20,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 6,
+  },
+  modalIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111111',
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  modalBody: {
+    fontSize: 14,
+    color: '#555555',
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  modalButton: {
+    backgroundColor: '#007AFF',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 24,
+    alignSelf: 'stretch',
+    alignItems: 'center',
+  },
+  modalButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
     fontWeight: '600',
   },
 });

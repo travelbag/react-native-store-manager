@@ -3,6 +3,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
 import { Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import OrdersScreen from '../screens/OrdersScreen';
 import StatsScreen from '../screens/StatsScreen';
@@ -14,7 +15,7 @@ import ProfileScreen from '../screens/ProfileScreen';
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
 
-// Stack navigator for Orders tab
+// Orders stack
 function OrdersStack() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -28,6 +29,8 @@ function OrdersStack() {
 }
 
 const TabNavigator = () => {
+  const insets = useSafeAreaInsets();
+
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -42,35 +45,41 @@ const TabNavigator = () => {
 
           return <Ionicons name={iconName} size={size} color={color} />;
         },
+
         tabBarActiveTintColor: '#007AFF',
         tabBarInactiveTintColor: '#8E8E93',
+
+        // 🔥 THIS IS THE IMPORTANT FIX
         tabBarStyle: {
           backgroundColor: '#FFFFFF',
-          borderTopWidth: 1,
+          borderTopWidth: 0,
           borderTopColor: '#E5E5E5',
-          paddingBottom: Platform.OS === 'ios' ? 20 : 5,
-          height: Platform.OS === 'ios' ? 85 : 60,
+
+          // dynamic padding for system nav buttons
+          paddingBottom: Math.max(insets.bottom, 8),
+
+          // let RN handle height naturally
         },
+
         tabBarLabelStyle: {
           fontSize: 12,
           fontWeight: '500',
+          marginBottom: Platform.OS === 'ios' ? 0 : 4,
         },
+
         headerShown: false,
       })}
     >
-      <Tab.Screen 
-        name="Orders" 
+      <Tab.Screen
+        name="Orders"
         component={OrdersStack}
-        options={{
-          tabBarLabel: 'Orders',
-        }}
+        options={{ tabBarLabel: 'Orders' }}
       />
-      <Tab.Screen 
-        name="Analytics" 
+
+      <Tab.Screen
+        name="Analytics"
         component={StatsScreen}
-        options={{
-          tabBarLabel: 'Analytics',
-        }}
+        options={{ tabBarLabel: 'Analytics' }}
       />
     </Tab.Navigator>
   );
