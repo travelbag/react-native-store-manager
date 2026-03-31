@@ -1,12 +1,10 @@
 // API Configuration
-export const API_CONFIG = {
-  // Replace with your actual backend URL
-   //BASE_URL: 'http://192.168.1.204:8080/api', //home
-  BASE_URL: 'http://192.168.29.117:8080/api', // dot it
-    //BASE_URL: 'http://localhost:8080/api',
-  // BASE_URL: 'https://ubgukf7hdu.us-east-1.awsapprunner.com/api',
+const DEFAULT_PRODUCTION_BASE_URL = 'https://ubgukf7hdu.us-east-1.awsapprunner.com/api';
+const configuredBaseUrl =
+  process.env.EXPO_PUBLIC_API_BASE_URL?.trim() || DEFAULT_PRODUCTION_BASE_URL;
 
-  
+export const API_CONFIG = {
+  BASE_URL: configuredBaseUrl,
   // Store Manager Configuration - will be set from logged in user
   STORE_MANAGER_ID: null, // Set after login
   STORE_ID: null, // Set after login

@@ -13,6 +13,8 @@ install! 'cocoapods',
 
 prepare_react_native_project!
 
+project 'reactnativestoremanager.xcodeproj'
+
 target 'reactnativestoremanager' do
   use_expo_modules!
 

@@ -6,6 +6,7 @@ import {
 } from '../auth/authSession';
 
 const isAbsoluteUrl = (value) => /^https?:\/\//i.test(value);
+const DEFAULT_TIMEOUT_MS = 15000;
 
 const isJsonBody = (body) =>
   body &&
@@ -61,6 +62,7 @@ async function request(endpoint, options = {}) {
     body,
     requiresAuth = true,
     retryOn401 = true,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
     _hasRetried = false,
     ...rest
   } = options;
@@ -68,46 +70,65 @@ async function request(endpoint, options = {}) {
   const url = buildRequestUrl(endpoint);
   const requestHeaders = await buildHeaders(headers, requiresAuth);
   const requestBody = buildBody(body, requestHeaders);
+  const controller = rest.signal ? null : new AbortController();
+  const timeoutId =
+    controller && timeoutMs > 0
+      ? setTimeout(() => controller.abort(), timeoutMs)
+      : null;
 
-  const response = await fetch(url, {
-    ...rest,
-    method,
-    headers: requestHeaders,
-    body: requestBody,
-  });
+  try {
+    const response = await fetch(url, {
+      ...rest,
+      method,
+      headers: requestHeaders,
+      body: requestBody,
+      signal: rest.signal || controller?.signal,
+    });
 
-  if (
-    shouldRetryUnauthorized({
-      response,
-      url,
-      requiresAuth,
-      retryOn401,
-      hasRetried: _hasRetried,
-    })
-  ) {
-    const refreshedToken = await refreshAuthSession({ force: true });
-
-    if (refreshedToken) {
-      const retryHeaders = new Headers(headers || {});
-      retryHeaders.set('Authorization', `Bearer ${refreshedToken}`);
-
-      if (isJsonBody(body) && !retryHeaders.has('Content-Type')) {
-        retryHeaders.set('Content-Type', 'application/json');
-      }
-
-      return request(endpoint, {
-        ...rest,
-        method,
-        headers: retryHeaders,
-        body: requestBody,
+    if (
+      shouldRetryUnauthorized({
+        response,
+        url,
         requiresAuth,
         retryOn401,
-        _hasRetried: true,
-      });
+        hasRetried: _hasRetried,
+      })
+    ) {
+      const refreshedToken = await refreshAuthSession({ force: true });
+
+      if (refreshedToken) {
+        const retryHeaders = new Headers(headers || {});
+        retryHeaders.set('Authorization', `Bearer ${refreshedToken}`);
+
+        if (isJsonBody(body) && !retryHeaders.has('Content-Type')) {
+          retryHeaders.set('Content-Type', 'application/json');
+        }
+
+        return request(endpoint, {
+          ...rest,
+          method,
+          headers: retryHeaders,
+          body,
+          requiresAuth,
+          retryOn401,
+          timeoutMs,
+          _hasRetried: true,
+        });
+      }
+    }
+
+    return response;
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error('Request timed out');
+    }
+
+    throw error;
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
     }
   }
-
-  return response;
 }
 
 export const apiClient = {
