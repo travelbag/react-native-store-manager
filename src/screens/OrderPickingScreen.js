@@ -163,6 +163,7 @@ const OrderPickingScreen = ({ route, navigation }) => {
   const markPrintDone = async (item) => {
     const currentOrderId = order?.id || order?.orderId || orderId;
     const itemId = item?.id;
+    const backendItemId = item?.backendItemId ?? item?.id;
     if (!itemId) return;
 
     const scannedAt = new Date().toISOString();
@@ -175,7 +176,7 @@ const OrderPickingScreen = ({ route, navigation }) => {
         item?.barcode || `PRINT_${itemId}`, // fallback fake reference for print item
         pickedQty,
         scannedAt,
-        itemId
+        backendItemId
       );
     } catch (e) {
       console.warn('⚠️ Persist print completion failed, applying local state only:', e?.message);
@@ -368,7 +369,7 @@ const handleScanItem = (item) => {
           scannedBarcode,
           quantity,
           new Date().toISOString(),
-          item.id // include itemId for backends that prefer matching by id
+          null // product scans should match by barcode, not duplicated backend item ids
         );
       } catch (e) {
         // Non-fatal: fall back to local state so user can proceed, we'll reconcile on next sync
@@ -762,7 +763,14 @@ const checkOrderCompletion = () => {
 <FlatList
   data={safeItems}
   renderItem={renderItemCard}
-  keyExtractor={(item, index) => (item?.id ?? index).toString()}
+  keyExtractor={(item, index) =>
+    [
+      order?.id || order?.orderId || 'order',
+      item?.item_type || item?.type || 'item',
+      item?.id ?? item?.barcode ?? item?.fileName ?? item?.name ?? 'unknown',
+      index,
+    ].join(':')
+  }
 />
 
 

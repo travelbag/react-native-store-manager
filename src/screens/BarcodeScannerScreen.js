@@ -17,12 +17,20 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
   const [pickedQuantity, setPickedQuantity] = useState(1);
   const [showQuantitySelector, setShowQuantitySelector] = useState(false);
   const cameraRef = useRef(null);
+  const scanLockRef = useRef(false);
+  const successAlertOpenRef = useRef(false);
 
-  // Reset scanner state when itemId changes (for multi-item scanning)
-  useEffect(() => {
+  const resetScanner = () => {
+    scanLockRef.current = false;
+    successAlertOpenRef.current = false;
     setScanned(false);
     setPickedQuantity(1);
     setShowQuantitySelector(false);
+  };
+
+  // Reset scanner state when itemId changes (for multi-item scanning)
+  useEffect(() => {
+    resetScanner();
   }, [itemId]);
 
   // camera permissions
@@ -35,6 +43,11 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
   }, [permission]);
 
   const handleBarCodeScanned = ({ type, data }) => {
+    if (scanLockRef.current || successAlertOpenRef.current) {
+      return;
+    }
+
+    scanLockRef.current = true;
     console.log('Scanned type:', type, 'data:', data);
     // Accept all types here; we already constrain the camera's scanner settings.
     // Different platforms return different type strings (e.g., org.iso.Code128), so avoid over-filtering.
@@ -52,7 +65,7 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
         'Wrong Item',
         `❌ This barcode doesn't match ${itemName}.\n\nExpected: ${expectedBarcode}\nScanned: ${data}`,
         [
-          { text: 'Try Again', onPress: () => setScanned(false) },
+          { text: 'Try Again', onPress: () => resetScanner() },
           { text: 'Cancel', onPress: () => navigation.goBack() },
         ]
       );
@@ -60,6 +73,11 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
   };
 
   const confirmScan = (quantity, scannedData) => {
+    if (successAlertOpenRef.current) {
+      return;
+    }
+
+    successAlertOpenRef.current = true;
     Alert.alert(
       'Success!',
       `✅ ${itemName} scanned successfully!\nQuantity picked: ${quantity}${requiredQuantity > 1 ? ` of ${requiredQuantity}` : ''}`,
@@ -207,7 +225,7 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
         {scanned && !showQuantitySelector && (
           <TouchableOpacity
             style={styles.button}
-            onPress={() => setScanned(false)}
+            onPress={resetScanner}
           >
             <Text style={styles.buttonText}>Scan Again</Text>
           </TouchableOpacity>

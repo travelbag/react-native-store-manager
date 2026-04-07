@@ -278,6 +278,20 @@ export function OrdersProvider({ children }) {
   const isFetchingRef = React.useRef(false);
   const lastFetchAtRef = React.useRef(0);
 
+  const createLocalItemId = React.useCallback((orderId, item, idx, fallbackType = 'item') => {
+    const type = item?.item_type || item?.type || fallbackType;
+    const identityValue =
+      item?.barcode ??
+      item?.item_barcode ??
+      item?.file_name ??
+      item?.fileName ??
+      item?.item_name ??
+      item?.name ??
+      'unnamed';
+
+    return `${orderId}:${type}:${identityValue}:${idx}`;
+  }, []);
+
   // Normalize a raw order from backend into app shape and apply item scanned mapping
   const normalizeOrder = React.useCallback((orderRaw) => {
     if (!orderRaw) return null;
@@ -326,6 +340,7 @@ export function OrdersProvider({ children }) {
         const pickedQuantity = item.pickedQuantity ?? (scanned ? (item.quantity ?? 1) : undefined);
 
         if (isPrintItem) {
+          const backendItemId = item?.id ?? item?.item_id ?? item?.itemId ?? null;
           const fileUrl =
             item?.file_url ||
             item?.fileUrl ||
@@ -347,7 +362,8 @@ export function OrdersProvider({ children }) {
           const orientation = String(item?.orientation || item?.print_orientation || item?.printOrientation || '').toLowerCase();
 
           return {
-            id: item?.id ?? item?.item_id ?? item?.itemId ?? `${orderId}_print_${idx}`,
+            id: createLocalItemId(orderId, item, idx, 'print'),
+            backendItemId,
             item_type: 'print',
             type: 'print',
             name: fileName,
@@ -365,8 +381,10 @@ export function OrdersProvider({ children }) {
           };
         }
 
+        const backendItemId = item?.id ?? item?.item_id ?? item?.itemId ?? null;
         return {
-          id: item.id ?? item.item_id ?? `${orderId}_item_${idx}`,
+          id: createLocalItemId(orderId, item, idx, 'product'),
+          backendItemId,
           item_type: item.item_type ?? 'product',
           type: item.type ?? 'product',
           name: item.productName ?? item.item_name ?? item.name ?? '',
@@ -408,7 +426,7 @@ export function OrdersProvider({ children }) {
       driverName: orderRaw.driverName ?? orderRaw.driver_name ?? orderRaw.driver?.name ?? '',
       driverPhone: orderRaw.driverPhone ?? orderRaw.driver_phone ?? orderRaw.driver?.phone ?? orderRaw.driver_mobile ?? '',
     };
-  }, []);
+  }, [createLocalItemId]);
 
   useEffect(() => {
     // Start/stop foreground polling based on auth, manager, and app activity
@@ -823,10 +841,16 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
   const persistItemScan = async (orderId, barcode, pickedQuantity = 1, scannedAt = new Date().toISOString(), itemId = null) => {
     try {
       const endpoint = `${API_CONFIG.ENDPOINTS.UPDATE_ITEM_SCAN}/${orderId}/items/${encodeURIComponent(barcode)}/scan`;
+      const requestBody = {
+        scanned: true,
+        pickedQuantity,
+        scannedAt,
+        ...(itemId ? { itemId } : {}),
+      };
       
       console.log('🔄 Persisting item scan to backend:', { orderId, barcode, pickedQuantity, scannedAt, itemId });
       const res = await apiClient.put(endpoint, {
-        body: { scanned: true, pickedQuantity, scannedAt, itemId },
+        body: requestBody,
       });
       if (!res.ok) {
         const t = await res.text();
