@@ -1,36 +1,60 @@
 import React, { useState, useEffect } from 'react';
+import { View, Text, Alert } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { useOrders, ORDER_STATUS, ITEM_STATUS } from '../context/OrdersContext';
 import {
-  View,
-  Text,
   StyleSheet,
   FlatList,
   TouchableOpacity,
-  Alert,
   Image,
   Modal,
   Pressable,
   Linking,
   ActivityIndicator,
+  DeviceEventEmitter,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Print from 'expo-print';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import { useOrders, ITEM_STATUS, ORDER_STATUS } from '../context/OrdersContext';
 
-const OrderPickingScreen = ({ route, navigation }) => {
+const OrderPicking = ({ route, navigation }) => {
+  const { orderId } = route.params; // Assuming orderId is passed
+  const { orders, refreshOrders } = useOrders();
+  const [order, setOrder] = useState(null);
+
+  // Find the current order
+  useEffect(() => {
+    const currentOrder = orders.find(o => (o.id || o.orderId) === orderId);
+    setOrder(currentOrder);
+  }, [orders, orderId]);
+
+  // Check for cancellation on screen focus and stop picking if cancelled
+  useFocusEffect(
+    React.useCallback(() => {
+      const checkOrderStatus = async () => {
+        await refreshOrders(); // Ensure latest data
+        const currentOrder = orders.find(o => (o.id || o.orderId) === orderId);
+        if (currentOrder && String(currentOrder.status || currentOrder.orderStatus || '').toLowerCase() === 'cancelled') {
+          Alert.alert(
+            'Order Cancelled',
+            `Order #${orderId} has been cancelled.`,
+            [{ text: 'OK', onPress: () => navigation.goBack() }] // Navigate back to stop picking
+          );
+        }
+      };
+      checkOrderStatus();
+      return () => {}; // Cleanup if needed
+    }, [orderId, orders, refreshOrders, navigation])
+  );
+
   const [allPickedOrUnavailable, setAllPickedOrUnavailable] = useState(false);
   const [previewItem, setPreviewItem] = useState(null);
   const [isPreviewVisible, setIsPreviewVisible] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadingItemId, setDownloadingItemId] = useState(null);
-  const { orderId } = route.params;
-  const { orders, updateItemStatus, scanBarcode, markItemUnavailable, updateOrderStatus, markOrderReady, persistItemScan } = useOrders();
-
-  // Find order by id or orderId for compatibility
-  const order = orders.find(o => o.id === orderId || o.orderId === orderId);
 
   // Get items array safely
   const items = React.useMemo(() => {
@@ -50,6 +74,33 @@ const OrderPickingScreen = ({ route, navigation }) => {
 
   // Filter out any null/undefined entries to avoid crashes in counts and render
   const safeItems = React.useMemo(() => (items || []).filter(Boolean), [items]);
+
+  useEffect(() => {
+    const currentOrderId = String(order?.id || order?.orderId || orderId || '').trim();
+    if (!currentOrderId) return undefined;
+
+    const cancellationListener = DeviceEventEmitter.addListener('orderCancelled', (payload = {}) => {
+      const cancelledOrderId = String(payload?.orderId || '').trim();
+      if (!cancelledOrderId || cancelledOrderId !== currentOrderId) return;
+
+      const reasonText = payload?.reason ? `\nReason: ${payload.reason}` : '';
+      Alert.alert(
+        'Order Cancelled',
+        `Order cancelled. Stop packing for this order immediately.${reasonText}`,
+        [
+          {
+            text: 'OK',
+            onPress: () => navigation.navigate('OrdersList', { selectedTab: ORDER_STATUS.ACCEPTED }),
+          },
+        ],
+        { cancelable: false }
+      );
+    });
+
+    return () => {
+      cancellationListener.remove();
+    };
+  }, [navigation, order?.id, order?.orderId, orderId]);
 
   // Check if all items are picked or unavailable
   useEffect(() => {
@@ -1219,4 +1270,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default OrderPickingScreen;
+export default OrderPicking;

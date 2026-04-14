@@ -21,6 +21,7 @@ const OrdersScreen = ({ route, navigation }) => {
   const { manager, logout } = useAuth();
   const [selectedFilter, setSelectedFilter] = useState(ORDER_STATUS.PENDING);
   const [refreshing, setRefreshing] = useState(false);
+  const [alertedCancelledOrders, setAlertedCancelledOrders] = useState(new Set()); // Track alerted order IDs to prevent duplicates
   const insets = useSafeAreaInsets();
 
   // Handle navigation parameter to set the selected tab
@@ -31,6 +32,30 @@ const OrdersScreen = ({ route, navigation }) => {
       route.params.selectedTab = undefined;
     }
   }, [route?.params?.selectedTab]);
+
+  // Detect newly cancelled orders and show alert (only once per order, for current orders not yet assigned/delivered)
+  useEffect(() => {
+    const currentOrders = Array.isArray(orders) ? orders : [];
+    const cancelledOrders = currentOrders.filter(order => {
+      const orderId = order?.id || order?.orderId;
+      const currentStatus = String(order?.status || order?.orderStatus || '').toLowerCase();
+      // Only alert for cancelled orders that are "current" (not yet assigned or delivered)
+      const isCurrentOrder = ['pending', 'accepted', 'ready'].includes(currentStatus); // Adjust if needed based on your workflow
+      return currentStatus === 'cancelled' && isCurrentOrder && !alertedCancelledOrders.has(orderId);
+    });
+
+    // Show alert for each qualifying cancelled order (only once)
+    cancelledOrders.forEach(order => {
+      const orderId = order?.id || order?.orderId;
+      Alert.alert(
+        'Order Cancelled',
+        `Order #${orderId} has been cancelled.`,
+        [{ text: 'OK' }]
+      );
+      // Mark as alerted to prevent future duplicates
+      setAlertedCancelledOrders(prev => new Set(prev).add(orderId));
+    });
+  }, [orders, alertedCancelledOrders]); // Runs whenever orders change
 
   const safeOrders = Array.isArray(orders) ? orders : [];
   // Normalize status for filtering
