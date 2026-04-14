@@ -82,6 +82,8 @@ const OrderCard = ({ order }) => {
         return '#8E8E93';
       case ORDER_STATUS.REJECTED:
         return '#FF3B30';
+      case 'cancelled':
+        return '#8E8E93';
       default:
         return '#8E8E93';
     }
@@ -103,6 +105,8 @@ const OrderCard = ({ order }) => {
         return 'Delivered';
       case 'rejected':
         return 'Rejected';
+      case 'cancelled':
+        return 'Cancelled';
       default:
         return 'Pending';
     }

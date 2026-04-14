@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useReducer, useEffect } from 'react';
 import * as Notifications from 'expo-notifications';
-import { Platform, AppState } from 'react-native';
+import { Platform, AppState, DeviceEventEmitter } from 'react-native';
+import { io } from 'socket.io-client';
 import NotificationService from '../services/NotificationService';
 import { API_CONFIG } from '../config/api';
 import { apiClient } from '../services/apiClient';
@@ -42,6 +43,17 @@ const ACTIONS = {
   UPDATE_ITEM_STATUS: 'UPDATE_ITEM_STATUS',
   SET_ORDERS: 'SET_ORDERS',
   REMOVE_ORDER: 'REMOVE_ORDER',
+};
+
+const normalizeValue = (value) => String(value ?? '').trim();
+const normalizeStatusValue = (value) => normalizeValue(value).toLowerCase();
+const normalizeStoreIdValue = (value) => normalizeValue(value).replace(/^store-/i, '');
+const extractOrderIdValue = (order = {}) => normalizeValue(order?.orderId ?? order?.id);
+
+const buildSocketBaseUrl = () => {
+  const configured = String(API_CONFIG.BASE_URL || '').trim();
+  if (!configured) return '';
+  return configured.replace(/\/api\/?$/i, '');
 };
 
 // Reducer
@@ -143,9 +155,12 @@ function ordersReducer(state, action) {
       return { ...state, orders: uniqueOrders, loading: false };
     
     case ACTIONS.REMOVE_ORDER:
+      const targetOrderKey = normalizeValue(action.payload);
       return {
         ...state,
-        orders: state.orders.filter(order => order.id !== action.payload),
+        orders: state.orders.filter(
+          (order) => extractOrderIdValue(order) !== targetOrderKey
+        ),
       };
             // Helper to ensure order.items is always an array and normalize shape
     default:
@@ -272,11 +287,17 @@ export function OrdersProvider({ children }) {
   const syncIntervalRef = React.useRef(null);
   // Switch to timeout-based polling to ensure spacing after each fetch completes
   const pollTimeoutRef = React.useRef(null);
+  const socketRef = React.useRef(null);
+  const ordersRef = React.useRef([]);
   const [isAppActive, setIsAppActive] = React.useState(true);
   const consecutiveFailuresRef = React.useRef(0);
   const appStateRef = React.useRef(AppState.currentState);
   const isFetchingRef = React.useRef(false);
   const lastFetchAtRef = React.useRef(0);
+
+  useEffect(() => {
+    ordersRef.current = Array.isArray(state.orders) ? state.orders : [];
+  }, [state.orders]);
 
   const createLocalItemId = React.useCallback((orderId, item, idx, fallbackType = 'item') => {
     const type = item?.item_type || item?.type || fallbackType;
@@ -507,6 +528,105 @@ export function OrdersProvider({ children }) {
       sub.remove();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated || !manager?.storeId) return undefined;
+
+    const socketBaseUrl = buildSocketBaseUrl();
+    if (!socketBaseUrl) return undefined;
+
+    const normalizedStoreId = normalizeStoreIdValue(manager.storeId);
+    const rawStoreId = normalizeValue(manager.storeId);
+    const socketClient = io(socketBaseUrl, {
+      transports: ['websocket'],
+      reconnection: true,
+    });
+
+    socketRef.current = socketClient;
+
+    const joinStoreRooms = () => {
+      const candidateStoreRooms = new Set(
+        [rawStoreId, normalizedStoreId, normalizedStoreId ? `store-${normalizedStoreId}` : ''].filter(Boolean)
+      );
+
+      candidateStoreRooms.forEach((room) => {
+        socketClient.emit('join-room', room);
+      });
+    };
+
+    const handleOrderCancelled = (payload = {}) => {
+      const eventOrderId = normalizeValue(payload?.orderId);
+      if (!eventOrderId) return;
+
+      const payloadStoreId = normalizeStoreIdValue(payload?.storeId);
+      if (payloadStoreId && normalizedStoreId && payloadStoreId !== normalizedStoreId) return;
+
+      const existingOrder = ordersRef.current.find(
+        (order) => extractOrderIdValue(order) === eventOrderId
+      );
+      const existingOrderStatus = normalizeStatusValue(
+        existingOrder?.status ?? existingOrder?.orderStatus
+      );
+
+      if (existingOrderStatus === ORDER_STATUS.ACCEPTED || existingOrderStatus === ORDER_STATUS.READY) {
+        dispatch({ type: ACTIONS.REMOVE_ORDER, payload: eventOrderId });
+      } else if (existingOrder) {
+        dispatch({
+          type: ACTIONS.ADD_ORDER,
+          payload: {
+            ...existingOrder,
+            status: 'cancelled',
+            orderStatus: 'cancelled',
+          },
+        });
+      }
+
+      DeviceEventEmitter.emit('orderCancelled', {
+        orderId: eventOrderId,
+        cancelledBy: payload?.cancelledBy || 'system',
+        reason: payload?.reason || '',
+        trackingActive: Boolean(payload?.trackingActive),
+      });
+    };
+
+    const handleOrderAssigned = (payload = {}) => {
+      const eventOrderId = normalizeValue(payload?.orderId);
+      if (!eventOrderId) return;
+
+      const payloadStoreId = normalizeStoreIdValue(payload?.storeId);
+      if (payloadStoreId && normalizedStoreId && payloadStoreId !== normalizedStoreId) return;
+
+      const existingOrder = ordersRef.current.find(
+        (order) => extractOrderIdValue(order) === eventOrderId
+      );
+      if (!existingOrder) return;
+
+      dispatch({
+        type: ACTIONS.ADD_ORDER,
+        payload: {
+          ...existingOrder,
+          status: 'assigned',
+          orderStatus: 'assigned',
+          driverId: payload?.driverId ?? existingOrder?.driverId ?? null,
+        },
+      });
+    };
+
+    socketClient.on('connect', joinStoreRooms);
+    socketClient.on('order_cancelled', handleOrderCancelled);
+    socketClient.on('order_assigned', handleOrderAssigned);
+    joinStoreRooms();
+
+    return () => {
+      socketClient.off('connect', joinStoreRooms);
+      socketClient.off('order_cancelled', handleOrderCancelled);
+      socketClient.off('order_assigned', handleOrderAssigned);
+      socketClient.disconnect();
+      if (socketRef.current === socketClient) {
+        socketRef.current = null;
+      }
+    };
+  }, [dispatch, isAuthenticated, manager?.storeId]);
 
 // Fetch orders from backend DB by storeId and optional status
 const fetchOrdersFromDB = async (status = null, source = 'manual') => {
