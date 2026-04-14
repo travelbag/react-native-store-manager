@@ -2,6 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, Alert } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useOrders, ORDER_STATUS, ITEM_STATUS } from '../context/OrdersContext';
+import { View, Text, Alert } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { useOrders, ORDER_STATUS, ITEM_STATUS } from '../context/OrdersContext';
 import {
   StyleSheet,
   FlatList,
@@ -11,6 +14,7 @@ import {
   Pressable,
   Linking,
   ActivityIndicator,
+  DeviceEventEmitter,
   DeviceEventEmitter,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -80,6 +84,33 @@ const OrderPicking = ({ route, navigation }) => {
 
   // Filter out any null/undefined entries to avoid crashes in counts and render
   const safeItems = React.useMemo(() => (items || []).filter(Boolean), [items]);
+
+  useEffect(() => {
+    const currentOrderId = String(order?.id || order?.orderId || orderId || '').trim();
+    if (!currentOrderId) return undefined;
+
+    const cancellationListener = DeviceEventEmitter.addListener('orderCancelled', (payload = {}) => {
+      const cancelledOrderId = String(payload?.orderId || '').trim();
+      if (!cancelledOrderId || cancelledOrderId !== currentOrderId) return;
+
+      const reasonText = payload?.reason ? `\nReason: ${payload.reason}` : '';
+      Alert.alert(
+        'Order Cancelled',
+        `Order cancelled. Stop packing for this order immediately.${reasonText}`,
+        [
+          {
+            text: 'OK',
+            onPress: () => navigation.navigate('OrdersList', { selectedTab: ORDER_STATUS.ACCEPTED }),
+          },
+        ],
+        { cancelable: false }
+      );
+    });
+
+    return () => {
+      cancellationListener.remove();
+    };
+  }, [navigation, order?.id, order?.orderId, orderId]);
 
   useEffect(() => {
     const currentOrderId = String(order?.id || order?.orderId || orderId || '').trim();
@@ -1150,4 +1181,5 @@ const styles = StyleSheet.create({
   },
 });
 
+export default OrderPicking;
 export default OrderPicking;
