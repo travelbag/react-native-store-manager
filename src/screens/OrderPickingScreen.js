@@ -2,9 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, Alert } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useOrders, ORDER_STATUS, ITEM_STATUS } from '../context/OrdersContext';
-import { View, Text, Alert } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
-import { useOrders, ORDER_STATUS, ITEM_STATUS } from '../context/OrdersContext';
 import {
   StyleSheet,
   FlatList,
@@ -14,7 +11,6 @@ import {
   Pressable,
   Linking,
   ActivityIndicator,
-  DeviceEventEmitter,
   DeviceEventEmitter,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -1181,5 +1177,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default OrderPicking;
 export default OrderPicking;

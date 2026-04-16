@@ -195,9 +195,9 @@ const OrderCard = ({ order }) => {
       case 'pending':
         return (
           <View style={styles.actionButtons}>
-            <TouchableOpacity style={styles.rejectButton} onPress={handleReject}>
+            {/* <TouchableOpacity style={styles.rejectButton} onPress={handleReject}>
               <Text style={styles.rejectButtonText}>Reject</Text>
-            </TouchableOpacity>
+            </TouchableOpacity> */}
             <TouchableOpacity style={styles.acceptButton} onPress={handleAcceptOrder}>
               <Text style={styles.acceptButtonText}>Accept</Text>
             </TouchableOpacity>
