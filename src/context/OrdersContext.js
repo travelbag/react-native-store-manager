@@ -2,8 +2,8 @@ import React, { createContext, useContext, useReducer, useEffect } from 'react';
 import * as Notifications from 'expo-notifications';
 import { Platform, AppState, DeviceEventEmitter } from 'react-native';
 import { io } from 'socket.io-client';
-import NotificationService from '../services/NotificationService';
-import { API_CONFIG } from '../config/api';
+import NotificationService, { ORDER_NOTIFICATION_CHANNEL_ID } from '../services/NotificationService';
+import { API_CONFIG, buildApiUrl } from '../config/api';
 import { apiClient } from '../services/apiClient';
 import { useAuth } from './AuthContext';
 
@@ -49,6 +49,21 @@ const normalizeValue = (value) => String(value ?? '').trim();
 const normalizeStatusValue = (value) => normalizeValue(value).toLowerCase();
 const normalizeStoreIdValue = (value) => normalizeValue(value).replace(/^store-/i, '');
 const extractOrderIdValue = (order = {}) => normalizeValue(order?.orderId ?? order?.id);
+const extractAcceptedManagerIdValue = (order = {}) =>
+  normalizeValue(order?.acceptedByManagerId ?? order?.accepted_by_manager_id);
+
+/** Backend often sends `confirmed` for brand-new orders; treat like pending for alerts */
+const isPendingNewOrderStatus = (status) => {
+  const s = normalizeStatusValue(status);
+  return (
+    s === '' ||
+    s === 'pending' ||
+    s === 'confirmed' ||
+    s === 'new' ||
+    s === 'placed' ||
+    s === 'received'
+  );
+};
 
 const buildSocketBaseUrl = () => {
   const configured = String(API_CONFIG.BASE_URL || '').trim();
@@ -294,10 +309,32 @@ export function OrdersProvider({ children }) {
   const appStateRef = React.useRef(AppState.currentState);
   const isFetchingRef = React.useRef(false);
   const lastFetchAtRef = React.useRef(0);
+  /** orderId -> last successfully merged time (dedupes duplicate push bursts) */
+  const groceryOrderHandledAtRef = React.useRef(new Map());
+  const groceryOrderFetchInFlightRef = React.useRef(new Set());
+  /** null until first list snapshot; then Set of order ids last seen from fetch/poll */
+  const previousPollOrderIdsRef = React.useRef(null);
+  const pendingOrderSoundAtRef = React.useRef(new Map());
+  /** Dedupe DeviceEventEmitter newOrderReceived (push + poll can fire within seconds) */
+  const newOrderEventAtRef = React.useRef(new Map());
+
+  const emitNewOrderReceived = React.useCallback((order, source) => {
+    const orderId = String(order?.orderId ?? order?.id ?? '');
+    if (!orderId) return;
+    const now = Date.now();
+    const last = newOrderEventAtRef.current.get(orderId);
+    if (last != null && now - last < 2000) return;
+    newOrderEventAtRef.current.set(orderId, now);
+    DeviceEventEmitter.emit('newOrderReceived', { orderId, source, order });
+  }, []);
 
   useEffect(() => {
     ordersRef.current = Array.isArray(state.orders) ? state.orders : [];
   }, [state.orders]);
+
+  useEffect(() => {
+    previousPollOrderIdsRef.current = null;
+  }, [manager?.storeId, manager?.id]);
 
   const createLocalItemId = React.useCallback((orderId, item, idx, fallbackType = 'item') => {
     const type = item?.item_type || item?.type || fallbackType;
@@ -312,6 +349,25 @@ export function OrdersProvider({ children }) {
 
     return `${orderId}:${type}:${identityValue}:${idx}`;
   }, []);
+
+  const isOrderVisibleToManager = React.useCallback(
+    (order) => {
+      const status = normalizeStatusValue(order?.status ?? order?.orderStatus);
+      const acceptedByManagerId = extractAcceptedManagerIdValue(order);
+      const currentManagerId = normalizeValue(manager?.id);
+
+      if (status === ORDER_STATUS.PENDING || status === '') {
+        return true;
+      }
+
+      if (!acceptedByManagerId) {
+        return true;
+      }
+
+      return acceptedByManagerId === currentManagerId;
+    },
+    [manager?.id]
+  );
 
   // Normalize a raw order from backend into app shape and apply item scanned mapping
   const normalizeOrder = React.useCallback((orderRaw) => {
@@ -446,11 +502,84 @@ export function OrdersProvider({ children }) {
       driverId: orderRaw.driverId ?? orderRaw.driver_id ?? orderRaw.driver?.id ?? null,
       driverName: orderRaw.driverName ?? orderRaw.driver_name ?? orderRaw.driver?.name ?? '',
       driverPhone: orderRaw.driverPhone ?? orderRaw.driver_phone ?? orderRaw.driver?.phone ?? orderRaw.driver_mobile ?? '',
+      acceptedByManagerId: orderRaw.acceptedByManagerId ?? orderRaw.accepted_by_manager_id ?? null,
+      acceptedByManagerName: orderRaw.acceptedByManagerName ?? orderRaw.accepted_by_manager_name ?? null,
+      acceptedAt: orderRaw.acceptedAt ?? orderRaw.accepted_at ?? null,
     };
   }, [createLocalItemId]);
 
+  const schedulePendingOrderSoundAlert = React.useCallback(async (order) => {
+    const orderId = String(order?.orderId ?? order?.id ?? '');
+    if (!orderId) return;
+    if (!isPendingNewOrderStatus(order?.status ?? order?.orderStatus)) return;
+
+    const now = Date.now();
+    const last = pendingOrderSoundAtRef.current.get(orderId);
+    if (last != null && now - last < 20000) return;
+    pendingOrderSoundAtRef.current.set(orderId, now);
+
+    try {
+      const { status: perm } = await Notifications.getPermissionsAsync();
+      if (perm !== 'granted') {
+        const { status: next } = await Notifications.requestPermissionsAsync();
+        if (next !== 'granted') {
+          if (__DEV__) console.warn('⚠️ Pending order sound skipped: notification permission not granted');
+          return;
+        }
+      }
+
+      await NotificationService.ensureOrdersChannelAsync();
+
+      // Explicit time trigger: Android requires channel + seconds>=1; iOS null trigger can skip sound in foreground.
+      const trigger =
+        Platform.OS === 'android'
+          ? { channelId: ORDER_NOTIFICATION_CHANNEL_ID, seconds: 1 }
+          : { seconds: 1 };
+
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: 'New order — pending',
+          body: `Order #${orderId}${order.customerName ? ` · ${order.customerName}` : ''}`,
+          data: {
+            orderId,
+            type: 'grocery_order_foreground',
+            _isLocalForegroundAlert: true,
+          },
+          sound: 'default',
+          priority: Notifications.AndroidNotificationPriority.MAX,
+          interruptionLevel: 'timeSensitive',
+        },
+        trigger,
+      });
+    } catch (e) {
+      console.warn('⚠️ Pending order sound failed:', e?.message ?? e);
+    }
+  }, []);
+
+  const applyOrdersSnapshot = React.useCallback(
+    (orders) => {
+      const ids = new Set(orders.map((o) => String(o.orderId ?? o.id ?? '')));
+      const prev = previousPollOrderIdsRef.current;
+      if (prev !== null) {
+        for (const order of orders) {
+          const oid = String(order.orderId ?? order.id ?? '');
+          if (prev.has(oid)) continue;
+          if (isPendingNewOrderStatus(order.status ?? order.orderStatus)) {
+            schedulePendingOrderSoundAlert(order);
+            emitNewOrderReceived(order, 'poll_snapshot');
+          }
+        }
+      }
+      previousPollOrderIdsRef.current = ids;
+      dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
+    },
+    [schedulePendingOrderSoundAlert, emitNewOrderReceived],
+  );
+
   useEffect(() => {
     // Start/stop foreground polling based on auth, manager, and app activity
+    let cancelled = false;
+
     const stopTimers = () => {
       if (syncIntervalRef.current) {
         clearInterval(syncIntervalRef.current);
@@ -467,6 +596,7 @@ export function OrdersProvider({ children }) {
         clearTimeout(pollTimeoutRef.current);
       }
       pollTimeoutRef.current = setTimeout(async () => {
+        if (cancelled) return;
         if (isFetchingRef.current) {
           // If a fetch is in progress, reschedule to avoid overlap
           schedulePoll();
@@ -475,8 +605,9 @@ export function OrdersProvider({ children }) {
         isFetchingRef.current = true;
         try {
           const orders = await fetchOrdersFromDB(null, 'interval');
+          if (cancelled) return;
           consecutiveFailuresRef.current = 0; // reset failures on success
-          dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
+          applyOrdersSnapshot(orders);
         } catch (e) {
           consecutiveFailuresRef.current += 1;
           if (consecutiveFailuresRef.current >= 5) {
@@ -494,28 +625,44 @@ export function OrdersProvider({ children }) {
     };
 
     if (isAuthenticated && manager && isAppActive) {
-      // Initial fetch after login/foreground
-      fetchOrdersFromDB(null, 'initial').then(orders => {
-        dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
-      });
-      initializeNotifications();
       // Ensure no interval remains
       if (syncIntervalRef.current) {
         clearInterval(syncIntervalRef.current);
         syncIntervalRef.current = null;
       }
-      // Start timeout-based polling
-      schedulePoll();
+
+      // Register channel + listeners before first snapshot so Android pending-order alerts can play sound.
+      (async () => {
+        try {
+          await initializeNotifications();
+        } catch (e) {
+          console.warn('⚠️ initializeNotifications failed:', e?.message ?? e);
+        }
+        if (cancelled) return;
+        try {
+          const orders = await fetchOrdersFromDB(null, 'initial');
+          if (cancelled) return;
+          applyOrdersSnapshot(orders);
+        } catch (e) {
+          console.warn('⚠️ Initial orders fetch failed:', e?.message ?? e);
+        }
+        if (cancelled) return;
+        schedulePoll();
+      })();
     } else {
       // Stop polling if conditions are not met (logged out, manager missing, or app background)
       stopTimers();
+      if (!isAuthenticated || !manager) {
+        NotificationService.removeNotificationListeners();
+      }
     }
 
     // Cleanup when deps change/unmount
     return () => {
+      cancelled = true;
       stopTimers();
     };
-  }, [isAuthenticated, manager, isAppActive]);
+  }, [isAuthenticated, manager, isAppActive, applyOrdersSnapshot]);
 
   // Observe app state to pause polling when app goes to background/inactive
   useEffect(() => {
@@ -652,7 +799,7 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
     const normalized = Array.isArray(rawOrders)
       ? rawOrders.map(normalizeOrder).filter(Boolean)
       : [];
-    return normalized;
+    return normalized.filter(isOrderVisibleToManager);
   } catch (error) {
     console.error('❌ Error fetching orders from DB:', error);
     return [];
@@ -668,7 +815,7 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
         return state.orders;
       }
       const orders = await fetchOrdersFromDB(status, 'manual');
-      dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
+      applyOrdersSnapshot(orders);
       return orders;
     } catch (e) {
       console.warn('⚠️ Failed to refresh orders:', e);
@@ -696,7 +843,7 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
         try {
           const orders = await fetchOrdersFromDB(null, 'interval');
           consecutiveFailuresRef.current = 0;
-          dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
+          applyOrdersSnapshot(orders);
         } catch (e) {
           consecutiveFailuresRef.current += 1;
           if (consecutiveFailuresRef.current >= 5) {
@@ -720,13 +867,21 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
       if (Platform.OS === 'android' && !API_CONFIG.USE_FIREBASE) {
         console.log('🔔 Using Expo local notifications for Android (no Firebase)');
         await Notifications.requestPermissionsAsync();
-        Notifications.setNotificationHandler({
-          handleNotification: async () => ({
-            shouldShowAlert: true,
-            shouldPlaySound: false,
-            shouldSetBadge: false,
-          }),
-        });
+        await NotificationService.ensureOrdersChannelAsync();
+        NotificationService.setupNotificationListeners(
+          (notification) => {
+            const data = notification.request.content.data || {};
+            if (data._isLocalForegroundAlert || data.type === 'grocery_order_foreground') return;
+            if (data.type === 'grocery_order') handleNewOrderNotification(data);
+            else if (data.type === 'order_status_updated' || data.type === 'order_updated') refreshOrders();
+          },
+          (response) => {
+            const data = response.notification.request.content.data || {};
+            if (data._isLocalForegroundAlert || data.type === 'grocery_order_foreground') return;
+            if (data.type === 'grocery_order') handleNewOrderNotification(data);
+            else if (data.type === 'order_status_updated' || data.type === 'order_updated') refreshOrders();
+          },
+        );
       } else {
         // Get push token and register with backend
         const token = await NotificationService.registerForPushNotificationsAsync();
@@ -744,9 +899,11 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
         // Set up notification listeners for real push notifications
         NotificationService.setupNotificationListeners(
           (notification) => {
-            console.log('🔔 Notification received:', notification);
-            const data = notification.request.content.data;
-            console.log('🔍 Notification data:', data);
+            const data = notification.request.content.data || {};
+            // Local "sound bridge" alerts must not re-run fetch (same payload as push → infinite loop)
+            if (data._isLocalForegroundAlert || data.type === 'grocery_order_foreground') {
+              return;
+            }
             if (data.type === 'grocery_order') {
               handleNewOrderNotification(data);
             } else if (data.type === 'order_status_updated' || data.type === 'order_updated') {
@@ -755,7 +912,10 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
             }
           },
           (response) => {
-            const data = response.notification.request.content.data;
+            const data = response.notification.request.content.data || {};
+            if (data._isLocalForegroundAlert || data.type === 'grocery_order_foreground') {
+              return;
+            }
             if (data.type === 'grocery_order') {
               handleNewOrderNotification(data);
             } else if (data.type === 'order_status_updated' || data.type === 'order_updated') {
@@ -828,23 +988,41 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
   // Handle new order notification
   const handleNewOrderNotification = async (notificationData) => {
     try {
-      // Fetch full order details from backend
-      const orderId = notificationData.orderId;
+      if (notificationData?._isLocalForegroundAlert) {
+        return;
+      }
+      const orderId = notificationData?.orderId;
+      if (!orderId) {
+        return;
+      }
+      const now = Date.now();
+      const last = groceryOrderHandledAtRef.current.get(orderId);
+      const dedupeMs = 15000;
+      if (last != null && now - last < dedupeMs) {
+        return;
+      }
+      if (groceryOrderFetchInFlightRef.current.has(orderId)) {
+        return;
+      }
+      groceryOrderFetchInFlightRef.current.add(orderId);
+
       console.log('📦 Handling new order notification for order ID:', orderId);
-      const orderDetails = await fetchOrderDetails(orderId);
+      let orderDetails;
+      try {
+        orderDetails = await fetchOrderDetails(orderId);
+      } finally {
+        groceryOrderFetchInFlightRef.current.delete(orderId);
+      }
       console.log('📦 New order details fetched:', orderDetails);
       if (orderDetails) {
+        groceryOrderHandledAtRef.current.set(orderId, Date.now());
         addOrder(orderDetails);
-        // If Android and not using Firebase, show local notification
-        if (Platform.OS === 'android' && !API_CONFIG.USE_FIREBASE) {
-          await Notifications.scheduleNotificationAsync({
-            content: {
-              title: 'New Grocery Order',
-              body: `Order #${orderId} received!`,
-              data: notificationData,
-            },
-            trigger: null,
-          });
+        emitNewOrderReceived(orderDetails, 'push');
+        if (previousPollOrderIdsRef.current) {
+          previousPollOrderIdsRef.current.add(String(orderId));
+        }
+        if (isPendingNewOrderStatus(orderDetails.status ?? orderDetails.orderStatus)) {
+          await schedulePendingOrderSoundAlert(orderDetails);
         }
       }
     } catch (error) {
@@ -900,13 +1078,29 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
   const acceptOrder = async (orderId) => {
     console.log('✅ Accepting order ID:', orderId);
     try {
-      console.log('🔄 Sending accept order request to backend...', `/orders/${orderId}/status`);
+      const endpoint = `/orders/${orderId}/status`;
+      const fullUrl = buildApiUrl(endpoint);
+      const payload = { status: ORDER_STATUS.ACCEPTED };
+      console.log('🔄 Sending accept order request to backend...', {
+        endpoint,
+        fullUrl,
+        payload,
+        managerId: manager?.id,
+        managerName: manager?.name,
+      });
       // Update backend
-      const response = await apiClient.put(`/orders/${orderId}/status`, {
-        body: { status: ORDER_STATUS.ACCEPTED },
+      const response = await apiClient.put(endpoint, {
+        body: payload,
       });
       
       console.log('🔄 Accept order API response status:', response.status);
+      let responseData = null;
+      try {
+        responseData = await response.json();
+      } catch (parseError) {
+        console.warn('⚠️ Accept order response was not valid JSON');
+      }
+      console.log('🔄 Accept order API response body:', responseData);
       
       if (response.ok) {
         console.log('✅ Order accepted successfully in backend');
@@ -916,8 +1110,7 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
         refreshOrders();
       } else {
         console.error('❌ Failed to accept order in backend:', response.status);
-        const errorText = await response.text();
-        console.error('❌ Error details:', errorText);
+        console.error('❌ Error details:', responseData);
         // Don't mutate local state on failure to avoid divergence
       }
     } catch (error) {
@@ -1044,7 +1237,7 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
       // 3) Optionally refetch orders from backend to ensure consistency (non-blocking)
       try {
         const orders = await fetchOrdersFromDB();
-        dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
+        applyOrdersSnapshot(orders);
         console.log('✅ Orders refreshed from backend after marking ready');
       } catch (fetchError) {
         console.warn('⚠️ Failed to refresh orders after marking ready:', fetchError);

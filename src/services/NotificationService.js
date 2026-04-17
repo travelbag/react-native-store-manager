@@ -1,22 +1,81 @@
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
-// Configure notification behavior
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
+/** Must match Android channelId in local schedules + Expo push `channelId` for FCM. */
+export const ORDER_NOTIFICATION_CHANNEL_ID = 'orders';
+
+export function logNotificationPath(kind, detail = {}) {
+  const payload = {
+    kind,
+    appState: AppState.currentState,
+    ...detail,
+  };
+  console.log('[notification-path]', JSON.stringify(payload));
+}
+
+/**
+ * Single app-wide handler for notifications presented while the app is foregrounded.
+ * Do not call setNotificationHandler elsewhere (e.g. in context) or behavior becomes undefined.
+ */
+function configureNotificationHandler() {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
+  });
+}
+
+configureNotificationHandler();
 
 class NotificationService {
   constructor() {
     this.expoPushToken = null;
     this.notificationListener = null;
     this.responseListener = null;
+  }
+
+  /**
+   * Call once on app mount (e.g. App.js) to log when the app was opened from a notification
+   * (background → foreground or cold start from tray). Does not replace response listeners.
+   */
+  async logColdStartOrBackgroundOpenFromTray() {
+    try {
+      const last = await Notifications.getLastNotificationResponseAsync();
+      if (last?.notification) {
+        const data = last.notification.request.content.data || {};
+        logNotificationPath('cold_start_or_tray_open', {
+          type: data.type,
+          orderId: data.orderId,
+          actionIdentifier: last.actionIdentifier,
+        });
+      }
+    } catch (e) {
+      if (__DEV__) console.warn('[notification-path] cold start check failed:', e?.message);
+    }
+  }
+
+  /**
+   * Android: channel must exist before any local notification with channelId (e.g. pending-order sound).
+   * Safe to call repeatedly; call from sound scheduling if init races the first poll.
+   */
+  async ensureOrdersChannelAsync() {
+    if (Platform.OS !== 'android') {
+      return;
+    }
+    await Notifications.setNotificationChannelAsync(ORDER_NOTIFICATION_CHANNEL_ID, {
+      name: 'New Orders',
+      importance: Notifications.AndroidImportance.MAX,
+      vibrationPattern: [0, 500, 250, 500],
+      lightColor: '#FF231F7C',
+      sound: 'default',
+      enableVibrate: true,
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+      bypassDnd: false,
+    });
   }
 
   async registerForPushNotificationsAsync() {
@@ -85,6 +144,7 @@ class NotificationService {
             const timeoutPromise = new Promise((_, reject) => 
               setTimeout(() => reject(new Error('Timeout')), 5000)
             );
+            const projectId = Constants?.expoConfig?.extra?.eas?.projectId ?? Constants?.easConfig?.projectId;
             const tokenPromise = Notifications.getExpoPushTokenAsync({ projectId });
             token = (await Promise.race([tokenPromise, timeoutPromise])).data;
             console.log('✅ Token obtained on retry:', token);
@@ -100,14 +160,7 @@ class NotificationService {
       return null;
     }
 
-    if (Platform.OS === 'android') {
-      await Notifications.setNotificationChannelAsync('orders', {
-        name: 'New Orders',
-        importance: Notifications.AndroidImportance.MAX,
-        vibrationPattern: [0, 250, 250, 250],
-        lightColor: '#FF231F7C',
-      });
-    }
+    await this.ensureOrdersChannelAsync();
 
     this.expoPushToken = token;
     
@@ -124,17 +177,30 @@ class NotificationService {
   }
 
   setupNotificationListeners(onNotificationReceived, onNotificationResponseReceived) {
-    // Listen for incoming notifications while app is foregrounded
-    this.notificationListener = Notifications.addNotificationReceivedListener(notification => {
-      console.log('Notification received:', notification);
+    // Re-registering without this stacks duplicate handlers (e.g. after appState/manager effect re-runs).
+    this.removeNotificationListeners();
+
+    // Foreground only: Expo does not invoke this when the app is backgrounded (OS shows the notification).
+    this.notificationListener = Notifications.addNotificationReceivedListener((notification) => {
+      const data = notification.request.content.data || {};
+      logNotificationPath('foreground_received', {
+        type: data.type,
+        orderId: data.orderId,
+        identifier: notification.request.identifier,
+      });
       if (onNotificationReceived) {
         onNotificationReceived(notification);
       }
     });
 
-    // Listen for notification responses (user taps notification)
-    this.responseListener = Notifications.addNotificationResponseReceivedListener(response => {
-      console.log('Notification response:', response);
+    // User tapped notification (from foreground, background, or killed state after launch).
+    this.responseListener = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response.notification.request.content.data || {};
+      logNotificationPath('notification_tap', {
+        type: data.type,
+        orderId: data.orderId,
+        actionIdentifier: response.actionIdentifier,
+      });
       if (onNotificationResponseReceived) {
         onNotificationResponseReceived(response);
       }
@@ -156,9 +222,11 @@ class NotificationService {
         title,
         body,
         data,
-        sound: true,
+        sound: 'default',
+        priority: Notifications.AndroidNotificationPriority.MAX,
+        interruptionLevel: 'timeSensitive',
       },
-      trigger: { seconds: 1 },
+      trigger: Platform.OS === 'android' ? { channelId: ORDER_NOTIFICATION_CHANNEL_ID, seconds: 1 } : { seconds: 1 },
     });
   }
 

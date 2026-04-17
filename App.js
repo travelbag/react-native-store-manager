@@ -6,12 +6,17 @@ import { OrdersProvider } from './src/context/OrdersContext';
 import AuthNavigator from './src/navigation/AuthNavigator';
 import { hydrateAuthSession } from './src/auth/authSession';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import NotificationService from './src/services/NotificationService';
 
 export default function App() {
   const logoutHandlerRef = useRef(null);
 
   useEffect(() => {
     hydrateAuthSession();
+  }, []);
+
+  useEffect(() => {
+    NotificationService.logColdStartOrBackgroundOpenFromTray();
   }, []);
 
   return (
