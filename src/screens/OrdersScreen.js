@@ -40,7 +40,7 @@ const OrdersScreen = ({ route, navigation }) => {
       const orderId = order?.id || order?.orderId;
       const currentStatus = String(order?.status || order?.orderStatus || '').toLowerCase();
       // Only alert for cancelled orders that are "current" (not yet assigned or delivered)
-      const isCurrentOrder = ['pending', 'accepted', 'ready'].includes(currentStatus); // Adjust if needed based on your workflow
+      const isCurrentOrder = ['pending', 'accepted'].includes(currentStatus); // Adjust if needed based on your workflow
       return currentStatus === 'cancelled' && isCurrentOrder && !alertedCancelledOrders.has(orderId);
     });
 
@@ -64,6 +64,11 @@ const OrdersScreen = ({ route, navigation }) => {
     return String(status).toLowerCase();
   };
 
+  const isAcceptedTabStatus = (o) => {
+    const s = normalizeStatus(o.status ?? o.orderStatus);
+    return s === 'accepted';
+  };
+
   const filters = [
     { 
       key: ORDER_STATUS.PENDING, 
@@ -73,12 +78,7 @@ const OrdersScreen = ({ route, navigation }) => {
     { 
       key: ORDER_STATUS.ACCEPTED, 
       label: 'Accepted', 
-      count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === 'accepted').length 
-    },
-    { 
-      key: ORDER_STATUS.READY, 
-      label: 'Ready', 
-      count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === 'ready').length 
+      count: safeOrders.filter(isAcceptedTabStatus).length 
     },
     { 
       key: ORDER_STATUS.ASSIGNED, 
@@ -97,10 +97,14 @@ const OrdersScreen = ({ route, navigation }) => {
     },
   ];
 
-  // Simple filtering - each order appears in exactly one tab
+  // Accepted tab includes only accepted orders.
   const filteredOrders = safeOrders.filter(order => {
     const orderStatus = normalizeStatus(order.status ?? order.orderStatus);
-    return orderStatus === normalizeStatus(selectedFilter);
+    const filter = normalizeStatus(selectedFilter);
+    if (filter === normalizeStatus(ORDER_STATUS.ACCEPTED)) {
+      return orderStatus === 'accepted';
+    }
+    return orderStatus === filter;
   });
 
     //console.log('Filtered Orders:', filteredOrders);

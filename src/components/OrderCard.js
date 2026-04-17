@@ -45,6 +45,7 @@ const OrderCard = ({ order }) => {
   const specialInstructions = order?.specialInstructions || '';
   const driverName = order?.driverName || '';
   const driverPhone = order?.driverPhone || '';
+  const packageRack = order?.packageRack || '';
 
   const isPrintItem = (item) => {
     const rawType = String(item?.item_type || item?.type || '').toLowerCase();
@@ -76,8 +77,6 @@ const OrderCard = ({ order }) => {
         return '#FF9500';
       case ORDER_STATUS.ACCEPTED:
         return '#007AFF';
-      case ORDER_STATUS.READY:
-        return '#34C759';
       case ORDER_STATUS.COMPLETED:
         return '#8E8E93';
       case ORDER_STATUS.REJECTED:
@@ -96,8 +95,6 @@ const OrderCard = ({ order }) => {
         return 'Pending';
       case 'accepted':
         return 'Accepted';
-      case 'ready':
-        return 'Ready';
       case 'assigned':
         return 'Assigned';
       case 'completed':
@@ -142,7 +139,12 @@ const OrderCard = ({ order }) => {
       if (typeof refreshOrders === 'function') {
         refreshOrders();
       }
-      Alert.alert('Success', 'Driver assigned successfully!');
+      Alert.alert('Success', 'Driver assigned successfully!', [
+        {
+          text: 'OK',
+          onPress: () => navigation.navigate('OrdersList', { selectedTab: ORDER_STATUS.ASSIGNED }),
+        },
+      ]);
     } catch (error) {
       const message = error?.message || 'Failed to assign driver';
       if (String(message).toLowerCase().includes('no drivers available')) {
@@ -212,20 +214,6 @@ const OrderCard = ({ order }) => {
           </TouchableOpacity>
         );
       
-      case 'ready':
-        return (
-          <TouchableOpacity 
-            style={[styles.primaryButton, isAssigningDriver && styles.primaryButtonDisabled]}
-            onPress={handleAssignDriver}
-            disabled={isAssigningDriver}
-          >
-            <Ionicons name="car-outline" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
-            <Text style={styles.primaryButtonText}>
-              {isAssigningDriver ? 'Assigning...' : 'Assign Driver'}
-            </Text>
-          </TouchableOpacity>
-        );
-      
       default:
         return null;
     }
@@ -264,6 +252,12 @@ const OrderCard = ({ order }) => {
           <View style={[styles.statusBadge, { backgroundColor: getStatusColor(status) }]}>
             <Text style={styles.statusText}>{getStatusText(status)}</Text>
           </View>
+          {packageRack ? (
+            <View style={styles.rackBadge}>
+              <Ionicons name="cube-outline" size={14} color="#FFFFFF" />
+              <Text style={styles.rackBadgeText}>{packageRack}</Text>
+            </View>
+          ) : null}
         </View>
       </View>
 
@@ -334,6 +328,12 @@ const OrderCard = ({ order }) => {
           <Text style={styles.infoLabel}>Phone:</Text>
           <Text style={styles.infoText}>{phoneNumber}</Text>
         </View>
+        {packageRack ? (
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Package Rack:</Text>
+            <Text style={styles.infoTextDriver}>{packageRack}</Text>
+          </View>
+        ) : null}
         {(driverName || driverPhone) ? (
           <View style={styles.driverBlock}>
             <View style={styles.infoRow}>
@@ -420,6 +420,21 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '600',
+  },
+  rackBadge: {
+    marginTop: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 16,
+    backgroundColor: '#1F2937',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  rackBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
   },
   itemsContainer: {
     marginBottom: 12,

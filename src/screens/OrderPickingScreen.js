@@ -19,6 +19,10 @@ import * as Print from 'expo-print';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 
+const PACKAGE_RACK_OPTIONS = ['A', 'B', 'C', 'D'].flatMap((col) =>
+  Array.from({ length: 15 }, (_, idx) => `${col}${idx + 1}`)
+);
+
 const OrderPicking = ({ route, navigation }) => {
   const { orderId } = route.params;
   const { 
@@ -27,11 +31,14 @@ const OrderPicking = ({ route, navigation }) => {
     updateItemStatus,
     markItemUnavailable,
     persistItemScan,
-    markOrderReady,
+    completePickingAndAssignDriver,
   } = useOrders();
   
   const [order, setOrder] = useState(null);
   const [allPickedOrUnavailable, setAllPickedOrUnavailable] = useState(false);
+  const [isAssigningDriver, setIsAssigningDriver] = useState(false);
+  const [selectedPackageRack, setSelectedPackageRack] = useState('');
+  const [isRackPickerVisible, setIsRackPickerVisible] = useState(false);
   const [previewItem, setPreviewItem] = useState(null);
   const [isPreviewVisible, setIsPreviewVisible] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
@@ -43,6 +50,13 @@ const OrderPicking = ({ route, navigation }) => {
     const currentOrder = orders.find(o => (o.id || o.orderId) === orderId);
     setOrder(currentOrder);
   }, [orders, orderId]);
+
+  useEffect(() => {
+    const rackFromOrder = String(order?.packageRack || '').trim();
+    if (rackFromOrder) {
+      setSelectedPackageRack(rackFromOrder);
+    }
+  }, [order?.packageRack]);
 
   // Check for cancellation on screen focus and stop picking if cancelled
   useFocusEffect(
@@ -329,8 +343,6 @@ const OrderPicking = ({ route, navigation }) => {
         return 'Picking Items';
       case normalizeStatus(ORDER_STATUS.PREPARING):
         return 'Preparing';
-      case normalizeStatus(ORDER_STATUS.READY):
-        return 'Ready';
       case normalizeStatus(ORDER_STATUS.COMPLETED):
         return 'Completed';
       case normalizeStatus(ORDER_STATUS.REJECTED):
@@ -347,6 +359,12 @@ const OrderPicking = ({ route, navigation }) => {
       </SafeAreaView>
     );
   }
+
+  const orderStatusNorm = normalizeStatus(order.status ?? order.orderStatus);
+  const canAssignDriver =
+    allPickedOrUnavailable &&
+    !['assigned', 'delivered', 'completed', 'cancelled'].includes(orderStatusNorm) &&
+    orderStatusNorm === 'accepted';
 
   const getItemStatusColor = (status) => {
     switch (status) {
@@ -721,6 +739,46 @@ const OrderPicking = ({ route, navigation }) => {
         </Pressable>
       </Modal>
 
+      <Modal
+        animationType="fade"
+        transparent
+        visible={isRackPickerVisible}
+        onRequestClose={() => setIsRackPickerVisible(false)}
+      >
+        <Pressable style={styles.previewBackdrop} onPress={() => setIsRackPickerVisible(false)}>
+          <Pressable style={styles.rackPickerCard} onPress={() => {}}>
+            <Text style={styles.rackPickerTitle}>Select package rack</Text>
+            <Text style={styles.rackPickerSubtitle}>
+              Choose where the packed order is stored before assigning the driver.
+            </Text>
+            <View style={styles.rackGrid}>
+              {PACKAGE_RACK_OPTIONS.map((rack) => (
+                <TouchableOpacity
+                  key={rack}
+                  style={[
+                    styles.rackOption,
+                    selectedPackageRack === rack && styles.rackOptionSelected,
+                  ]}
+                  onPress={() => {
+                    setSelectedPackageRack(rack);
+                    setIsRackPickerVisible(false);
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.rackOptionText,
+                      selectedPackageRack === rack && styles.rackOptionTextSelected,
+                    ]}
+                  >
+                    {rack}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       <FlatList
         data={safeItems}
         renderItem={renderItemCard}
@@ -735,49 +793,67 @@ const OrderPicking = ({ route, navigation }) => {
         contentContainerStyle={{ padding: 16, paddingBottom: 24 }}
       />
 
-      {allPickedOrUnavailable && 
-       (order.status !== ORDER_STATUS.READY && order.orderStatus !== ORDER_STATUS.READY) && (
+      {canAssignDriver && (
         <View style={styles.readyButtonContainer}>
           <View style={styles.readyMessageContainer}>
             <Ionicons name="checkmark-circle" size={24} color="#34C759" />
             <Text style={styles.readyMessageText}>
-              All items processed! Ready to mark order as complete.
+              All items processed! Assign a driver for delivery.
             </Text>
           </View>
           <TouchableOpacity
-            style={styles.markReadyButton}
+            style={styles.rackSelector}
+            onPress={() => setIsRackPickerVisible(true)}
+          >
+            <View>
+              <Text style={styles.rackSelectorLabel}>Package Rack</Text>
+              <Text style={styles.rackSelectorValue}>
+                {selectedPackageRack || 'Choose rack'}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#007AFF" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.markReadyButton, isAssigningDriver && styles.markReadyButtonDisabled]}
+            disabled={isAssigningDriver || !selectedPackageRack}
             onPress={async () => {
               try {
-                const readyOrderId = order.id || order.orderId || orderId;
-                console.log('Marking order ready with ID:', readyOrderId);
-                await markOrderReady(readyOrderId);
+                const targetOrderId = order.id || order.orderId || orderId;
+                if (!selectedPackageRack) {
+                  setIsRackPickerVisible(true);
+                  return;
+                }
+                setIsAssigningDriver(true);
+                await completePickingAndAssignDriver(targetOrderId, selectedPackageRack);
                 Alert.alert(
-                  'Order Ready! ✅',
-                  'This order has been marked as READY and is now available in the Ready tab.',
+                  'Driver assigned ✅',
+                  `This order is assigned to a driver and stored at rack ${selectedPackageRack}.`,
                   [
                     {
                       text: 'OK',
                       onPress: () => {
-                        navigation.navigate('OrdersList', { 
-                          selectedTab: ORDER_STATUS.READY 
+                        navigation.navigate('OrdersList', {
+                          selectedTab: ORDER_STATUS.ASSIGNED,
                         });
-                      }
-                    }
+                      },
+                    },
                   ]
                 );
               } catch (error) {
-                console.error('Error marking order ready:', error);
-                Alert.alert(
-                  'Error',
-                  'Failed to mark order as ready. Please try again.',
-                  [{ text: 'OK' }]
-                );
+                const msg = error?.message || 'Failed to assign driver. Please try again.';
+                if (String(msg).toLowerCase().includes('no drivers')) {
+                  Alert.alert('No drivers available', 'Try again in a few minutes.', [{ text: 'OK' }]);
+                } else {
+                  Alert.alert('Error', msg, [{ text: 'OK' }]);
+                }
+              } finally {
+                setIsAssigningDriver(false);
               }
             }}
           >
-            <Ionicons name="flag" size={20} color="#FFFFFF" />
+            <Ionicons name="car-outline" size={20} color="#FFFFFF" />
             <Text style={styles.markReadyButtonText}>
-              Mark Order Ready
+              {isAssigningDriver ? 'Assigning…' : 'Assign Driver'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -1048,6 +1124,28 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     flex: 1,
   },
+  rackSelector: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  rackSelectorLabel: {
+    fontSize: 12,
+    color: '#666666',
+    marginBottom: 4,
+  },
+  rackSelectorValue: {
+    fontSize: 16,
+    color: '#111111',
+    fontWeight: '700',
+  },
   markReadyButton: {
     backgroundColor: '#34C759',
     flexDirection: 'row',
@@ -1063,6 +1161,9 @@ const styles = StyleSheet.create({
     elevation: 3,
     gap: 8,
   },
+  markReadyButtonDisabled: {
+    opacity: 0.65,
+  },
   markReadyButtonText: {
     color: '#FFFFFF',
     fontSize: 18,
@@ -1074,6 +1175,49 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     padding: 20,
+  },
+  rackPickerCard: {
+    width: '100%',
+    maxWidth: 380,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+  },
+  rackPickerTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111111',
+  },
+  rackPickerSubtitle: {
+    fontSize: 13,
+    color: '#666666',
+    marginTop: 6,
+    marginBottom: 14,
+  },
+  rackGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  rackOption: {
+    width: '18%',
+    minWidth: 58,
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: '#F2F2F7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rackOptionSelected: {
+    backgroundColor: '#007AFF',
+  },
+  rackOptionText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#333333',
+  },
+  rackOptionTextSelected: {
+    color: '#FFFFFF',
   },
   previewCard: {
     width: '100%',

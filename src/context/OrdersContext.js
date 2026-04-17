@@ -5,6 +5,7 @@ import { io } from 'socket.io-client';
 import NotificationService, { ORDER_NOTIFICATION_CHANNEL_ID } from '../services/NotificationService';
 import { API_CONFIG, buildApiUrl } from '../config/api';
 import { apiClient } from '../services/apiClient';
+import { assignDriver } from '../services/DriverService';
 import { useAuth } from './AuthContext';
 
 const OrdersContext = createContext();
@@ -13,7 +14,6 @@ const OrdersContext = createContext();
 export const ORDER_STATUS = {
   PENDING: 'pending' || 'confirmed',
   ACCEPTED: 'accepted',
-  READY: 'ready',
   ASSIGNED: 'assigned',
   COMPLETED: 'delivered',
   REJECTED: 'rejected',
@@ -51,6 +51,24 @@ const normalizeStoreIdValue = (value) => normalizeValue(value).replace(/^store-/
 const extractOrderIdValue = (order = {}) => normalizeValue(order?.orderId ?? order?.id);
 const extractAcceptedManagerIdValue = (order = {}) =>
   normalizeValue(order?.acceptedByManagerId ?? order?.accepted_by_manager_id);
+
+/** Map API variants so the Assigned tab matches (`assigned` filter). */
+const ASSIGNED_ORDER_STATUS_ALIASES = new Set([
+  'driver_assigned',
+  'driverassigned',
+  'out_for_delivery',
+  'outfordelivery',
+  'dispatched',
+  'in_transit',
+  'intransit',
+]);
+
+const canonicalizeOrderStatus = (value) => {
+  const s = normalizeStatusValue(value);
+  if (!s) return ORDER_STATUS.PENDING;
+  if (ASSIGNED_ORDER_STATUS_ALIASES.has(s)) return ORDER_STATUS.ASSIGNED;
+  return s;
+};
 
 /** Backend often sends `confirmed` for brand-new orders; treat like pending for alerts */
 const isPendingNewOrderStatus = (status) => {
@@ -360,6 +378,17 @@ export function OrdersProvider({ children }) {
         return true;
       }
 
+      // Shared store queue: once driver is assigned or order is terminal, every store manager must see it.
+      // (Otherwise only the accepting manager matched acceptedByManagerId and others saw an empty Assigned tab.)
+      if (
+        status === ORDER_STATUS.ASSIGNED ||
+        status === ORDER_STATUS.COMPLETED ||
+        status === 'cancelled' ||
+        status === ORDER_STATUS.REJECTED
+      ) {
+        return true;
+      }
+
       if (!acceptedByManagerId) {
         return true;
       }
@@ -479,14 +508,18 @@ export function OrdersProvider({ children }) {
         };
       });
 
+    const rawOrderStatus = orderRaw.orderStatus ?? orderRaw.status ?? ORDER_STATUS.PENDING;
+    const driverId = orderRaw.driverId ?? orderRaw.driver_id ?? orderRaw.driver?.id ?? null;
+    const orderStatusCanonical = canonicalizeOrderStatus(rawOrderStatus);
+
     return {
       id: orderId,
       orderId,
       customerName: orderRaw.customerName ?? orderRaw.customer_name ?? '',
       items,
       total: orderRaw.totalPrice ?? orderRaw.total ?? orderRaw.total_amount ?? '0.00',
-      status: orderRaw.orderStatus ?? orderRaw.status ?? ORDER_STATUS.PENDING,
-      orderStatus: orderRaw.orderStatus ?? orderRaw.status ?? ORDER_STATUS.PENDING,
+      status: orderStatusCanonical,
+      orderStatus: orderStatusCanonical,
       timestamp: orderRaw.orderDate ?? orderRaw.created_at ?? new Date().toISOString(),
       deliveryAddress: orderRaw.deliveryAddress ?? orderRaw.delivery_address ?? '',
       phoneNumber: orderRaw.phoneNumber ?? orderRaw.customer_phone ?? '',
@@ -499,9 +532,10 @@ export function OrdersProvider({ children }) {
       deliveryLongitude: orderRaw.deliveryLongitude ?? '',
       paymentType: orderRaw.paymentType ?? '',
       // Driver assignment fields (for Assigned tab display)
-      driverId: orderRaw.driverId ?? orderRaw.driver_id ?? orderRaw.driver?.id ?? null,
+      driverId,
       driverName: orderRaw.driverName ?? orderRaw.driver_name ?? orderRaw.driver?.name ?? '',
       driverPhone: orderRaw.driverPhone ?? orderRaw.driver_phone ?? orderRaw.driver?.phone ?? orderRaw.driver_mobile ?? '',
+      packageRack: orderRaw.rackNumber ?? '',
       acceptedByManagerId: orderRaw.acceptedByManagerId ?? orderRaw.accepted_by_manager_id ?? null,
       acceptedByManagerName: orderRaw.acceptedByManagerName ?? orderRaw.accepted_by_manager_name ?? null,
       acceptedAt: orderRaw.acceptedAt ?? orderRaw.accepted_at ?? null,
@@ -715,7 +749,7 @@ export function OrdersProvider({ children }) {
         existingOrder?.status ?? existingOrder?.orderStatus
       );
 
-      if (existingOrderStatus === ORDER_STATUS.ACCEPTED || existingOrderStatus === ORDER_STATUS.READY) {
+      if (existingOrderStatus === ORDER_STATUS.ACCEPTED) {
         dispatch({ type: ACTIONS.REMOVE_ORDER, payload: eventOrderId });
       } else if (existingOrder) {
         dispatch({
@@ -784,17 +818,10 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
   let endpoint = `/orders/by-store/${manager.storeId}`;
   if (status) endpoint += `?status=${status}`;
   try {
-    if (__DEV__ && source === 'interval') {
-      // Keep logs light to avoid noisy console during polling; only tag interval
-      const now = Date.now();
-      const diff = lastFetchAtRef.current ? (now - lastFetchAtRef.current) : 0;
-      console.debug(`📡 (poll) Fetching orders from DB • +${diff}ms`);
-    }
     const response = await apiClient.get(endpoint);
     const data = await response.json();
    
 
-    //console.log('Fetched orders data from DB:', data);
     const rawOrders = data.orders || data || [];
     const normalized = Array.isArray(rawOrders)
       ? rawOrders.map(normalizeOrder).filter(Boolean)
@@ -811,7 +838,6 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
       // Debounce manual refreshes that occur too soon after a poll to reduce spam
       const now = Date.now();
       if (now - lastFetchAtRef.current < 1500) {
-        if (__DEV__) console.debug('⏳ Skipping manual refresh (recent poll)');
         return state.orders;
       }
       const orders = await fetchOrdersFromDB(status, 'manual');
@@ -1210,42 +1236,73 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
     updateItemStatus(orderId, itemId, ITEM_STATUS.UNAVAILABLE);
   };
 
-   const markOrderReady = async (orderId) => {
+  /**
+   * Single step after picking: assign driver directly.
+   * Backend no longer requires a separate `ready` transition before assignment.
+   */
+  const completePickingAndAssignDriver = async (orderId, packageRack) => {
     if (!orderId) {
-      console.error('❌ markOrderReady called without a valid orderId');
-      throw new Error('Order ID is required to mark as READY');
+      console.error('❌ completePickingAndAssignDriver: missing orderId');
+      throw new Error('Order ID is required');
     }
-    console.log('✅ Marking order as READY (pessimistic update), ID:', orderId);
-    
+    if (!packageRack) {
+      throw new Error('Package rack is required');
+    }
+    const storeId = manager?.storeId || manager?.store_id;
+    if (!storeId) {
+      throw new Error('Store ID is required to assign a driver');
+    }
+
+    console.log('✅ Finalizing picking → assign driver directly, ID:', orderId);
+
+    let assignResult;
     try {
-      // 1) Update backend first
-      const response = await apiClient.put(`/orders/${orderId}/status`, {
-        body: { status: ORDER_STATUS.READY },
+      assignResult = await assignDriver(orderId, storeId, packageRack);
+    } catch (e) {
+      throw e;
+    }
+
+    if (assignResult?.alreadyAssigned) {
+      console.log('ℹ️ Order was already assigned; syncing UI as assigned:', {
+        orderId,
+        driverId:
+          assignResult?.driverId ??
+          assignResult?.driver_id ??
+          assignResult?.order?.driverId ??
+          assignResult?.order?.driver_id ??
+          null,
       });
-      
-      console.log('🔄 Mark ready API response status:', response.status);
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('❌ Failed to mark order as READY in backend:', response.status, errorText);
-        throw new Error(`Backend error: ${response.status} - ${errorText}`);
-      }
-
-      // 2) Backend succeeded — now update local state for this one order only
-      updateOrderStatus(orderId, ORDER_STATUS.READY);
-
-      // 3) Optionally refetch orders from backend to ensure consistency (non-blocking)
-      try {
-        const orders = await fetchOrdersFromDB();
-        applyOrdersSnapshot(orders);
-        console.log('✅ Orders refreshed from backend after marking ready');
-      } catch (fetchError) {
-        console.warn('⚠️ Failed to refresh orders after marking ready:', fetchError);
-      }
-    } catch (error) {
-      console.error('❌ Error marking order as READY:', error);
-      // Do NOT mutate local order status on failure (avoid moving orders across tabs)
-      throw error;
+    }
+    console.log('[ui-state] setting local order status after assign', {
+      orderId,
+      status: ORDER_STATUS.ASSIGNED,
+      packageRack,
+      assignResult,
+    });
+    const existingOrder = ordersRef.current.find(
+      (order) => extractOrderIdValue(order) === normalizeValue(orderId)
+    );
+    const updatedOrderFromApi = assignResult?.order ? normalizeOrder(assignResult.order) : null;
+    if (updatedOrderFromApi) {
+      dispatch({ type: ACTIONS.ADD_ORDER, payload: updatedOrderFromApi });
+    } else if (existingOrder) {
+      dispatch({
+        type: ACTIONS.ADD_ORDER,
+        payload: {
+          ...existingOrder,
+          status: ORDER_STATUS.ASSIGNED,
+          orderStatus: ORDER_STATUS.ASSIGNED,
+          packageRack,
+        },
+      });
+    } else {
+      updateOrderStatus(orderId, ORDER_STATUS.ASSIGNED);
+    }
+    try {
+      const orders = await fetchOrdersFromDB();
+      applyOrdersSnapshot(orders);
+    } catch (fetchError) {
+      console.warn('⚠️ Failed to refresh orders after assign:', fetchError);
     }
   };
 
@@ -1270,7 +1327,7 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
     scanBarcode,
     markItemUnavailable,
   persistItemScan,
-    markOrderReady,
+    completePickingAndAssignDriver,
     completeOrder,
     removeOrder,
     // Add method to manually register token if needed

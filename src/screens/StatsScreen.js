@@ -79,10 +79,10 @@ const StatsScreen = () => {
     totalOrders: orders.length,
     todayOrders: todayOrders.length,
     pendingOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.PENDING).length,
-    acceptedOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.ACCEPTED).length,
+    acceptedOrders: orders.filter((o) => statusOf(o) === ORDER_STATUS.ACCEPTED).length,
     pickingOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.PICKING).length,
     preparingOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.PREPARING).length,
-    readyOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.READY).length,
+    readyOrders: 0,
     completedOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.COMPLETED).length,
     rejectedOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.REJECTED).length,
     totalRevenue: orders
@@ -176,11 +176,6 @@ const StatsScreen = () => {
               status="Preparing"
               count={stats.preparingOrders}
               color="#FF9500"
-            />
-            <StatusCard
-              status="Ready"
-              count={stats.readyOrders}
-              color="#34C759"
             />
             <StatusCard
               status="Completed"

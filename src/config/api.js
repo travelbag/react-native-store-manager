@@ -1,10 +1,28 @@
 // API Configuration
 const DEFAULT_PRODUCTION_BASE_URL = 'https://ubgukf7hdu.us-east-1.awsapprunner.com/api';
-const configuredBaseUrl =
-  process.env.EXPO_PUBLIC_API_BASE_URL?.trim() || DEFAULT_PRODUCTION_BASE_URL;
+
+/** LAN backend (Mac IP + API port). Change port if your server uses something other than 8080. */
+const LOCAL_API_BASE_URL = 'http://192.168.1.199:8080/api';
+
+/**
+ * Set `false` to hit production (`DEFAULT_PRODUCTION_BASE_URL`).
+ * Override either URL with `EXPO_PUBLIC_API_BASE_URL` in `.env` (highest priority).
+ */
+const USE_LOCAL_DEVELOPMENT = false;
+
+function resolveBaseUrl() {
+  const envOverride = process.env.EXPO_PUBLIC_API_BASE_URL?.trim();
+  if (envOverride) {
+    return envOverride;
+  }
+  if (USE_LOCAL_DEVELOPMENT) {
+    return LOCAL_API_BASE_URL;
+  }
+  return DEFAULT_PRODUCTION_BASE_URL;
+}
 
 export const API_CONFIG = {
-  BASE_URL: configuredBaseUrl,
+  BASE_URL: resolveBaseUrl(),
   // Store Manager Configuration - will be set from logged in user
   STORE_MANAGER_ID: null, // Set after login
   STORE_ID: null, // Set after login
