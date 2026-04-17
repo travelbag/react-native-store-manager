@@ -3,6 +3,10 @@ import * as Notifications from 'expo-notifications';
 import { Platform, AppState, DeviceEventEmitter } from 'react-native';
 import { io } from 'socket.io-client';
 import NotificationService, { ORDER_NOTIFICATION_CHANNEL_ID } from '../services/NotificationService';
+import {
+  startPendingOrderAlertLoop,
+  stopPendingOrderAlertLoop,
+} from '../services/PendingOrderAlertSound';
 import { API_CONFIG, buildApiUrl } from '../config/api';
 import { apiClient } from '../services/apiClient';
 import { assignDriver } from '../services/DriverService';
@@ -709,6 +713,42 @@ export function OrdersProvider({ children }) {
       sub.remove();
     };
   }, []);
+
+  const hasPendingOrdersAwaitingAcceptance = React.useMemo(
+    () =>
+      Array.isArray(state.orders) &&
+      state.orders.some((o) => isPendingNewOrderStatus(o.status ?? o.orderStatus)),
+    [state.orders],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const run = async () => {
+      if (!isAuthenticated || !manager?.storeId || !isAppActive) {
+        await stopPendingOrderAlertLoop();
+        return;
+      }
+      if (cancelled) return;
+      if (hasPendingOrdersAwaitingAcceptance) {
+        await startPendingOrderAlertLoop();
+      } else {
+        await stopPendingOrderAlertLoop();
+      }
+    };
+
+    run();
+
+    return () => {
+      cancelled = true;
+      stopPendingOrderAlertLoop();
+    };
+  }, [
+    hasPendingOrdersAwaitingAcceptance,
+    isAuthenticated,
+    manager?.storeId,
+    isAppActive,
+  ]);
 
   useEffect(() => {
     if (!isAuthenticated || !manager?.storeId) return undefined;
