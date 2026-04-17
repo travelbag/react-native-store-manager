@@ -32,7 +32,13 @@ const readAssignDriverPayload = async (response) => {
 };
 
 export const assignDriver = async (orderId, storeId, packageRack) => {
-  const body = { orderId, storeId, status: ASSIGN_DRIVER_STATUS, rackNumber: packageRack };
+  // Backend POST /api/orders/assign-driver-fromstore reads `packageRack` and writes orders.rack_number.
+  const body = {
+    orderId,
+    storeId,
+    status: ASSIGN_DRIVER_STATUS,
+    packageRack: packageRack != null ? String(packageRack).trim() : '',
+  };
   console.log('[ui->api] POST /orders/assign-driver-fromstore', {
     body,
   });

@@ -133,7 +133,7 @@ const OrderCard = ({ order }) => {
     const storeId = manager?.storeId || manager?.store_id || '';
     try {
       setIsAssigningDriver(true);
-      await assignDriver(orderId, storeId);
+      await assignDriver(orderId, storeId, packageRack);
       updateOrderStatus(orderId, ORDER_STATUS.ASSIGNED);
       // Pull fresh state from backend to reflect assigned driver across devices
       if (typeof refreshOrders === 'function') {
