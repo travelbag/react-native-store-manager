@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   Alert,
   Vibration,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,8 +18,17 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
   const [pickedQuantity, setPickedQuantity] = useState(1);
   const [showQuantitySelector, setShowQuantitySelector] = useState(false);
   const cameraRef = useRef(null);
+  const hardwareInputRef = useRef(null);
+  const hardwareScanTimerRef = useRef(null);
   const scanLockRef = useRef(false);
   const successAlertOpenRef = useRef(false);
+  const [hardwareScanValue, setHardwareScanValue] = useState('');
+
+  const focusHardwareInput = () => {
+    setTimeout(() => {
+      hardwareInputRef.current?.focus();
+    }, 150);
+  };
 
   const resetScanner = () => {
     scanLockRef.current = false;
@@ -26,12 +36,23 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
     setScanned(false);
     setPickedQuantity(1);
     setShowQuantitySelector(false);
+    setHardwareScanValue('');
+    focusHardwareInput();
   };
 
   // Reset scanner state when itemId changes (for multi-item scanning)
   useEffect(() => {
     resetScanner();
   }, [itemId]);
+
+  useEffect(() => {
+    focusHardwareInput();
+    return () => {
+      if (hardwareScanTimerRef.current) {
+        clearTimeout(hardwareScanTimerRef.current);
+      }
+    };
+  }, []);
 
   // camera permissions
   const [permission, requestPermission] = useCameraPermissions();
@@ -42,15 +63,16 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
     }
   }, [permission]);
 
-  const handleBarCodeScanned = ({ type, data }) => {
+  const handleScannedValue = (rawData) => {
     if (scanLockRef.current || successAlertOpenRef.current) {
+      return;
+    }
+    const data = String(rawData || '').trim();
+    if (!data) {
       return;
     }
 
     scanLockRef.current = true;
-    console.log('Scanned type:', type, 'data:', data);
-    // Accept all types here; we already constrain the camera's scanner settings.
-    // Different platforms return different type strings (e.g., org.iso.Code128), so avoid over-filtering.
     setScanned(true);
     Vibration.vibrate();
 
@@ -70,6 +92,10 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
         ]
       );
     }
+  };
+
+  const handleBarCodeScanned = ({ data }) => {
+    handleScannedValue(data);
   };
 
   const confirmScan = (quantity, scannedData) => {
@@ -164,9 +190,46 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
           <Text style={styles.quantityText}>Required: {requiredQuantity} items</Text>
         )}
         <Text style={styles.instructionText}>
-          Point your camera at the barcode on the product
+          Point your camera at the barcode or press the scanner trigger
         </Text>
       </View>
+
+      <TextInput
+        ref={hardwareInputRef}
+        value={hardwareScanValue}
+        onChangeText={(text) => {
+          setHardwareScanValue(text);
+
+          if (scanLockRef.current || successAlertOpenRef.current) {
+            return;
+          }
+
+          if (hardwareScanTimerRef.current) {
+            clearTimeout(hardwareScanTimerRef.current);
+          }
+
+          if (/[\n\r]/.test(text)) {
+            const cleaned = text.replace(/[\n\r]/g, '').trim();
+            setHardwareScanValue('');
+            handleScannedValue(cleaned);
+            return;
+          }
+
+          hardwareScanTimerRef.current = setTimeout(() => {
+            const cleaned = text.trim();
+            if (!cleaned) return;
+            setHardwareScanValue('');
+            handleScannedValue(cleaned);
+          }, 120);
+        }}
+        autoFocus
+        blurOnSubmit={false}
+        showSoftInputOnFocus={false}
+        autoCapitalize="none"
+        autoCorrect={false}
+        caretHidden
+        style={styles.hiddenHardwareInput}
+      />
 
       <View style={styles.scannerContainer}>
         <CameraView
@@ -253,6 +316,7 @@ const styles = StyleSheet.create({
   itemName: { fontSize: 20, fontWeight: 'bold', color: '#FFFFFF', marginBottom: 8, textAlign: 'center' },
   quantityText: { fontSize: 16, color: '#FFD700', fontWeight: '600', marginBottom: 4 },
   instructionText: { fontSize: 14, color: '#CCCCCC', textAlign: 'center' },
+  hiddenHardwareInput: { position: 'absolute', width: 1, height: 1, opacity: 0 },
   scannerContainer: { flex: 1, position: 'relative' },
   scanner: { flex: 1 },
   overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
