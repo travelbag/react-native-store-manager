@@ -62,7 +62,7 @@ const OrderPicking = ({ route, navigation }) => {
   useFocusEffect(
     React.useCallback(() => {
       const checkOrderStatus = async () => {
-        await refreshOrders(); // Ensure latest data
+        await refreshOrders(null, { force: true }); // Ensure latest data
         const currentOrder = orders.find(o => (o.id || o.orderId) === orderId);
         if (currentOrder && String(currentOrder.status || currentOrder.orderStatus || '').toLowerCase() === 'cancelled') {
           Alert.alert(
@@ -815,12 +815,12 @@ const OrderPicking = ({ route, navigation }) => {
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.markReadyButton, isAssigningDriver && styles.markReadyButtonDisabled]}
-            disabled={isAssigningDriver || !selectedPackageRack}
+            disabled={isAssigningDriver}
             onPress={async () => {
               try {
                 const targetOrderId = order.id || order.orderId || orderId;
                 if (!selectedPackageRack) {
-                  setIsRackPickerVisible(true);
+                  Alert.alert('Select package rack', 'Please select the package rack before assigning a driver.');
                   return;
                 }
                 setIsAssigningDriver(true);

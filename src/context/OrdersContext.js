@@ -123,7 +123,8 @@ function ordersReducer(state, action) {
             return {
               ...order,
               status: action.payload.status,
-              orderStatus: action.payload.status
+              orderStatus: action.payload.status,
+              backendStatus: action.payload.status,
             };
           }
           return order;
@@ -512,7 +513,13 @@ export function OrdersProvider({ children }) {
         };
       });
 
-    const rawOrderStatus = orderRaw.orderStatus ?? orderRaw.status ?? ORDER_STATUS.PENDING;
+    const rawOrderStatus =
+      orderRaw.orderStatus ??
+      orderRaw.order_status ??
+      orderRaw.status ??
+      orderRaw.backendStatus ??
+      orderRaw.backend_status ??
+      ORDER_STATUS.PENDING;
     const driverId = orderRaw.driverId ?? orderRaw.driver_id ?? orderRaw.driver?.id ?? null;
     const orderStatusCanonical = canonicalizeOrderStatus(rawOrderStatus);
 
@@ -524,6 +531,7 @@ export function OrdersProvider({ children }) {
       total: orderRaw.totalPrice ?? orderRaw.total ?? orderRaw.total_amount ?? '0.00',
       status: orderStatusCanonical,
       orderStatus: orderStatusCanonical,
+      backendStatus: orderStatusCanonical,
       timestamp: orderRaw.orderDate ?? orderRaw.created_at ?? new Date().toISOString(),
       deliveryAddress: orderRaw.deliveryAddress ?? orderRaw.delivery_address ?? '',
       phoneNumber: orderRaw.phoneNumber ?? orderRaw.customer_phone ?? '',
@@ -798,6 +806,7 @@ export function OrdersProvider({ children }) {
             ...existingOrder,
             status: 'cancelled',
             orderStatus: 'cancelled',
+          backendStatus: 'cancelled',
           },
         });
       }
@@ -828,6 +837,7 @@ export function OrdersProvider({ children }) {
           ...existingOrder,
           status: 'assigned',
           orderStatus: 'assigned',
+          backendStatus: 'assigned',
           driverId: payload?.driverId ?? existingOrder?.driverId ?? null,
         },
       });
@@ -873,11 +883,12 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
   }
 };
   // Public refresh helper to manually re-fetch orders
-  const refreshOrders = async (status = null) => {
+  const refreshOrders = async (status = null, options = {}) => {
     try {
+      const { force = false } = options;
       // Debounce manual refreshes that occur too soon after a poll to reduce spam
       const now = Date.now();
-      if (now - lastFetchAtRef.current < 1500) {
+      if (!force && now - lastFetchAtRef.current < 1500) {
         return state.orders;
       }
       const orders = await fetchOrdersFromDB(status, 'manual');
@@ -1332,6 +1343,7 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
           ...existingOrder,
           status: ORDER_STATUS.ASSIGNED,
           orderStatus: ORDER_STATUS.ASSIGNED,
+          backendStatus: ORDER_STATUS.ASSIGNED,
           packageRack,
         },
       });

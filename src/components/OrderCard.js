@@ -130,14 +130,18 @@ const OrderCard = ({ order }) => {
   const handleAssignDriver = async () => {
    // console.log('Assigning driver for order:', orderId);
     if (isAssigningDriver) return;
+    if (!String(packageRack || '').trim()) {
+      Alert.alert('Select package rack', 'Please select the package rack before assigning a driver.');
+      return;
+    }
     const storeId = manager?.storeId || manager?.store_id || '';
     try {
       setIsAssigningDriver(true);
       await assignDriver(orderId, storeId, packageRack);
       updateOrderStatus(orderId, ORDER_STATUS.ASSIGNED);
-      // Pull fresh state from backend to reflect assigned driver across devices
+      // Pull fresh state from backend so the old accepted snapshot is replaced immediately.
       if (typeof refreshOrders === 'function') {
-        refreshOrders();
+        await refreshOrders(null, { force: true });
       }
       Alert.alert('Success', 'Driver assigned successfully!', [
         {
@@ -192,6 +196,7 @@ const OrderCard = ({ order }) => {
 
   const renderActionButtons = () => {
     const statusNormalized = String(status || '').toLowerCase();
+    const hasAssignedRack = Boolean(String(packageRack || '').trim());
     
     switch (statusNormalized) {
       case 'pending':
@@ -207,6 +212,20 @@ const OrderCard = ({ order }) => {
         );
       
       case 'accepted':
+        if (hasAssignedRack) {
+          return (
+            <TouchableOpacity
+              style={[styles.primaryButton, styles.assignDriverButton, isAssigningDriver && styles.primaryButtonDisabled]}
+              onPress={handleAssignDriver}
+              disabled={isAssigningDriver}
+            >
+              <Ionicons name="car-outline" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
+              <Text style={styles.primaryButtonText}>
+                {isAssigningDriver ? 'Assigning…' : 'Assign Driver'}
+              </Text>
+            </TouchableOpacity>
+          );
+        }
         return (
           <TouchableOpacity style={styles.primaryButton} onPress={handleStartPicking}>
             <Ionicons name="basket-outline" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
@@ -589,6 +608,9 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 8,
     gap: 8,
+  },
+  assignDriverButton: {
+    backgroundColor: '#16A34A',
   },
   primaryButtonDisabled: {
     opacity: 0.6,
