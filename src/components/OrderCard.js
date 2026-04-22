@@ -9,6 +9,7 @@ import {
   Linking,
   Modal,
   Pressable,
+  ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useOrders, ORDER_STATUS, ITEM_STATUS } from '../context/OrdersContext';
@@ -16,12 +17,18 @@ import { useAuth } from '../context/AuthContext';
 import { useNavigation } from '@react-navigation/native';
 import { assignDriver } from '../services/DriverService';
 
-const OrderCard = ({ order }) => {
-  const { updateOrderStatus, acceptOrder, rejectOrder, refreshOrders } = useOrders();
+const PACKAGE_RACK_OPTIONS_CARD = ['A', 'B', 'C', 'D'].flatMap((col) =>
+  Array.from({ length: 15 }, (_, idx) => `${col}${idx + 1}`)
+);
+
+const OrderCard = ({ order, hideStatusBadge = false }) => {
+  const { updateOrderStatus, acceptOrder, rejectOrder, refreshOrders, mergeOrderPackageRack } = useOrders();
   const navigation = useNavigation();
   const { manager } = useAuth();
   const [noDriverVisible, setNoDriverVisible] = React.useState(false);
   const [isAssigningDriver, setIsAssigningDriver] = React.useState(false);
+  const [detailsModalVisible, setDetailsModalVisible] = React.useState(false);
+  const [rackModalVisible, setRackModalVisible] = React.useState(false);
 
   // Map backend fields to frontend expected fields
   const orderId = order?.id || order?.orderId || '';
@@ -45,7 +52,23 @@ const OrderCard = ({ order }) => {
   const specialInstructions = order?.specialInstructions || '';
   const driverName = order?.driverName || '';
   const driverPhone = order?.driverPhone || '';
-  const packageRack = order?.packageRack || '';
+  const orderRackFromServer = String(
+    order?.packageRack || order?.rackNumber || order?.rack_number || ''
+  ).trim();
+  const [rackPickOptimistic, setRackPickOptimistic] = React.useState(null);
+
+  React.useEffect(() => {
+    if (!rackPickOptimistic) return;
+    if (!orderRackFromServer) return;
+    if (orderRackFromServer === rackPickOptimistic) {
+      setRackPickOptimistic(null);
+      return;
+    }
+    setRackPickOptimistic(null);
+  }, [orderRackFromServer, rackPickOptimistic]);
+
+  const packageRack = String(rackPickOptimistic || orderRackFromServer || '').trim();
+  const hasAssignedRack = Boolean(packageRack);
 
   const isPrintItem = (item) => {
     const rawType = String(item?.item_type || item?.type || '').toLowerCase();
@@ -130,7 +153,7 @@ const OrderCard = ({ order }) => {
   const handleAssignDriver = async () => {
    // console.log('Assigning driver for order:', orderId);
     if (isAssigningDriver) return;
-    if (!String(packageRack || '').trim()) {
+    if (!hasAssignedRack) {
       Alert.alert('Select package rack', 'Please select the package rack before assigning a driver.');
       return;
     }
@@ -194,52 +217,264 @@ const OrderCard = ({ order }) => {
     return `${datePart} ${timePart}`;
   };
 
+  const statusNormalized = String(status || '').toLowerCase();
+  /** Hide the long items list on Pending / Accepted so Accept & Start Picking stay visible on small scanners. */
+  const useCompactItems = statusNormalized === 'pending' || statusNormalized === 'accepted';
+
+  const allItemsFinalized = React.useMemo(() => {
+    if (!items.length) return false;
+    return items.every((it) => {
+      const st = String(it?.status || '').toLowerCase();
+      return st === ITEM_STATUS.SCANNED || st === ITEM_STATUS.UNAVAILABLE;
+    });
+  }, [items]);
+
+  const renderItemsList = () =>
+    items.map((item, index) => (
+      <View key={index} style={styles.itemRow}>
+        {isPrintItem(item) ? (
+          <View style={styles.printIcon}>
+            <Ionicons name="document-text-outline" size={20} color="#007AFF" />
+          </View>
+        ) : (
+          <Image source={{ uri: item.image }} style={styles.itemImage} />
+        )}
+        <View style={styles.itemDetails}>
+          <View style={styles.itemTitleRow}>
+            <Text style={styles.itemName}>
+              {isPrintItem(item) ? getPrintFileName(item) : item.name}
+            </Text>
+            {isPrintItem(item) && (
+              <View style={styles.printBadge}>
+                <Text style={styles.printBadgeText}>PRINT</Text>
+              </View>
+            )}
+          </View>
+          <Text style={styles.itemPrice}>
+            {(() => {
+              if (isPrintItem(item)) {
+                const meta = getPrintMeta(item);
+                return `${meta.quantity} × ₹${meta.price} = ₹${(meta.quantity * meta.price).toFixed(2)}`;
+              }
+              const price = Number(item?.price ?? 0);
+              const quantity = Number(item?.quantity ?? 0);
+              return `${quantity} × ₹${price} = ₹${(quantity * price).toFixed(2)}`;
+            })()}
+          </Text>
+          {isPrintItem(item) &&
+            (() => {
+              const meta = getPrintMeta(item);
+              return (
+                <Text style={styles.printMeta}>
+                  {meta.pages} pages | {meta.colorMode === 'black_white' ? 'B/W' : 'Color'} | {meta.orientation}
+                </Text>
+              );
+            })()}
+        </View>
+        {item.status === ITEM_STATUS.SCANNED && (
+          <Ionicons name="checkmark-circle" size={20} color="#34C759" />
+        )}
+      </View>
+    ));
+
+  const renderAcceptedActions = () => {
+    if (!allItemsFinalized) {
+      return (
+        <TouchableOpacity style={styles.primaryButton} onPress={handleStartPicking}>
+          <Ionicons name="basket-outline" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
+          <Text style={styles.primaryButtonText}>Start Picking</Text>
+        </TouchableOpacity>
+      );
+    }
+    return (
+      <View style={styles.cardFinalizeRow}>
+        <TouchableOpacity
+          style={styles.cardRackHalf}
+          onPress={() => setRackModalVisible(true)}
+          activeOpacity={0.75}
+        >
+          <Text style={styles.cardRackLabel}>Package rack</Text>
+          <Text style={styles.cardRackValue} numberOfLines={1}>
+            {packageRack || 'Select…'}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[
+            styles.cardAssignHalf,
+            (!hasAssignedRack || isAssigningDriver) && styles.cardAssignHalfDisabled,
+          ]}
+          disabled={!hasAssignedRack || isAssigningDriver}
+          onPress={handleAssignDriver}
+        >
+          <Ionicons name="car-outline" size={18} color="#FFFFFF" />
+          <Text style={styles.cardAssignHalfText}>
+            {isAssigningDriver ? 'Assigning…' : 'Assign'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
   const renderActionButtons = () => {
-    const statusNormalized = String(status || '').toLowerCase();
-    const hasAssignedRack = Boolean(String(packageRack || '').trim());
-    
+    if (statusNormalized === 'accepted') {
+      return renderAcceptedActions();
+    }
     switch (statusNormalized) {
       case 'pending':
         return (
           <View style={styles.actionButtons}>
-            {/* <TouchableOpacity style={styles.rejectButton} onPress={handleReject}>
-              <Text style={styles.rejectButtonText}>Reject</Text>
-            </TouchableOpacity> */}
             <TouchableOpacity style={styles.acceptButton} onPress={handleAcceptOrder}>
               <Text style={styles.acceptButtonText}>Accept</Text>
             </TouchableOpacity>
           </View>
         );
-      
-      case 'accepted':
-        if (hasAssignedRack) {
-          return (
-            <TouchableOpacity
-              style={[styles.primaryButton, styles.assignDriverButton, isAssigningDriver && styles.primaryButtonDisabled]}
-              onPress={handleAssignDriver}
-              disabled={isAssigningDriver}
-            >
-              <Ionicons name="car-outline" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
-              <Text style={styles.primaryButtonText}>
-                {isAssigningDriver ? 'Assigning…' : 'Assign Driver'}
-              </Text>
-            </TouchableOpacity>
-          );
-        }
-        return (
-          <TouchableOpacity style={styles.primaryButton} onPress={handleStartPicking}>
-            <Ionicons name="basket-outline" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
-            <Text style={styles.primaryButtonText}>Start Picking</Text>
-          </TouchableOpacity>
-        );
-      
+
       default:
         return null;
     }
   };
 
+  const renderOrderDetailsBody = () => (
+    <>
+      <Text style={styles.detailsSectionTitle}>Customer</Text>
+      <Text style={styles.detailsLine}>{customerName || '—'}</Text>
+      <Text style={styles.detailsMeta}>Placed {formatDateTime(timestamp) || '—'}</Text>
+      <Text style={styles.detailsMeta}>Status: {getStatusText(status)}</Text>
+
+      <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Total</Text>
+      <Text style={styles.detailsLineStrong}>₹{total}</Text>
+
+      <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Address</Text>
+      <Text style={styles.detailsBlock}>{deliveryAddress || '—'}</Text>
+
+      <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Phone</Text>
+      <View style={styles.detailsPhoneRow}>
+        <Text style={styles.detailsLine}>{phoneNumber || '—'}</Text>
+        {phoneNumber ? (
+          <TouchableOpacity onPress={() => handleCall(phoneNumber)} hitSlop={10}>
+            <Ionicons name="call-outline" size={22} color="#007AFF" />
+          </TouchableOpacity>
+        ) : null}
+      </View>
+
+      {deliveryType ? (
+        <>
+          <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Delivery</Text>
+          <Text style={styles.detailsLine}>{deliveryType}</Text>
+        </>
+      ) : null}
+
+      {hasAssignedRack ? (
+        <>
+          <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Package rack</Text>
+          <Text style={styles.detailsLineStrong}>{packageRack}</Text>
+        </>
+      ) : null}
+
+      {(driverName || driverPhone) && String(status || '').toLowerCase() === 'assigned' ? (
+        <View style={styles.detailsDriverBlock}>
+          <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Driver</Text>
+          <Text style={styles.detailsLine}>{driverName || 'Assigned'}</Text>
+          {driverPhone ? (
+            <View style={styles.detailsPhoneRow}>
+              <Text style={styles.detailsLine}>{driverPhone}</Text>
+              <TouchableOpacity onPress={() => handleCall(driverPhone)} hitSlop={10}>
+                <Ionicons name="call-outline" size={22} color="#007AFF" />
+              </TouchableOpacity>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
+      {specialInstructions ? (
+        <>
+          <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Instructions</Text>
+          <Text style={styles.detailsBlock}>{specialInstructions}</Text>
+        </>
+      ) : null}
+
+      <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>
+        Items ({items.length})
+      </Text>
+      {renderItemsList()}
+    </>
+  );
+
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, useCompactItems && styles.containerMinimal]}>
+      <Modal
+        animationType="fade"
+        transparent
+        visible={rackModalVisible}
+        onRequestClose={() => setRackModalVisible(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setRackModalVisible(false)}>
+          <Pressable style={styles.rackPickModalCard} onPress={() => {}}>
+            <View style={styles.itemsModalHeader}>
+              <Text style={styles.itemsModalTitle}>Select package rack</Text>
+              <TouchableOpacity onPress={() => setRackModalVisible(false)} hitSlop={12}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={styles.rackPickScroll} keyboardShouldPersistTaps="handled">
+              <View style={styles.rackPickGrid}>
+                {PACKAGE_RACK_OPTIONS_CARD.map((rack) => (
+                  <TouchableOpacity
+                    key={rack}
+                    style={[
+                      styles.rackPickOption,
+                      packageRack === rack && styles.rackPickOptionSelected,
+                    ]}
+                    onPress={() => {
+                      setRackPickOptimistic(rack);
+                      mergeOrderPackageRack(orderId, rack);
+                      setRackModalVisible(false);
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.rackPickOptionText,
+                        packageRack === rack && styles.rackPickOptionTextSelected,
+                      ]}
+                    >
+                      {rack}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={detailsModalVisible}
+        onRequestClose={() => setDetailsModalVisible(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setDetailsModalVisible(false)}>
+          <Pressable style={styles.orderDetailsModalCard} onPress={() => {}}>
+            <View style={styles.itemsModalHeader}>
+              <Text style={styles.itemsModalTitle}>Order #{orderId}</Text>
+              <TouchableOpacity onPress={() => setDetailsModalVisible(false)} hitSlop={12}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </View>
+            <ScrollView
+              style={styles.orderDetailsScroll}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator
+            >
+              {renderOrderDetailsBody()}
+            </ScrollView>
+            <TouchableOpacity style={styles.detailsDoneButton} onPress={() => setDetailsModalVisible(false)}>
+              <Text style={styles.detailsDoneButtonText}>Done</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       <Modal
         animationType="fade"
         transparent
@@ -261,78 +496,98 @@ const OrderCard = ({ order }) => {
           </Pressable>
         </Pressable>
       </Modal>
+      {useCompactItems ? (
+        <>
+          <Pressable
+            style={styles.minimalTopRow}
+            onPress={() => setDetailsModalVisible(true)}
+            android_ripple={{ color: '#E5E5E5' }}
+          >
+            <View style={styles.minimalTopText}>
+              <Text style={styles.orderId}>Order #{orderId}</Text>
+              <Text style={styles.minimalHint}>Tap for customer, address, items & total</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#8E8E93" />
+          </Pressable>
+          <View style={styles.compactActionsWrap}>{renderActionButtons()}</View>
+        </>
+      ) : (
+        <>
       <View style={styles.header}>
         <View>
           <Text style={styles.orderId}>Order #{orderId}</Text>
           <Text style={styles.customerName}>{customerName}</Text>
           <Text style={styles.time}>{formatDateTime(timestamp)}</Text>
         </View>
-        <View style={styles.statusContainer}>
-          <View style={[styles.statusBadge, { backgroundColor: getStatusColor(status) }]}>
-            <Text style={styles.statusText}>{getStatusText(status)}</Text>
+        {!hideStatusBadge || packageRack ? (
+          <View style={styles.statusContainer}>
+            {!hideStatusBadge ? (
+              <View style={[styles.statusBadge, { backgroundColor: getStatusColor(status) }]}>
+                <Text style={styles.statusText}>{getStatusText(status)}</Text>
+              </View>
+            ) : null}
+            {packageRack ? (
+              <View style={styles.rackBadge}>
+                <Ionicons name="cube-outline" size={14} color="#FFFFFF" />
+                <Text style={styles.rackBadgeText}>{packageRack}</Text>
+              </View>
+            ) : null}
           </View>
-          {packageRack ? (
-            <View style={styles.rackBadge}>
-              <Ionicons name="cube-outline" size={14} color="#FFFFFF" />
-              <Text style={styles.rackBadgeText}>{packageRack}</Text>
-            </View>
-          ) : null}
-        </View>
+        ) : null}
       </View>
-
-      <View style={styles.itemsContainer}>
-        <Text style={styles.itemsTitle}>Items ({items.length})</Text>
-        {items.slice(0, 3).map((item, index) => (
-          <View key={index} style={styles.itemRow}>
-            {isPrintItem(item) ? (
-              <View style={styles.printIcon}>
-                <Ionicons name="document-text-outline" size={20} color="#007AFF" />
-              </View>
-            ) : (
-              <Image source={{ uri: item.image }} style={styles.itemImage} />
-            )}
-            <View style={styles.itemDetails}>
-              <View style={styles.itemTitleRow}>
-                <Text style={styles.itemName}>
-                  {isPrintItem(item) ? getPrintFileName(item) : item.name}
-                </Text>
-                {isPrintItem(item) && (
-                  <View style={styles.printBadge}>
-                    <Text style={styles.printBadgeText}>PRINT</Text>
-                  </View>
-                )}
-              </View>
-              <Text style={styles.itemPrice}>
-                {(() => {
-                  if (isPrintItem(item)) {
-                    const meta = getPrintMeta(item);
-                    return `${meta.quantity} × ₹${meta.price} = ₹${(meta.quantity * meta.price).toFixed(2)}`;
-                  }
-                  const price = Number(item?.price ?? 0);
-                  const quantity = Number(item?.quantity ?? 0);
-                  return `${quantity} × ₹${price} = ₹${(quantity * price).toFixed(2)}`;
-                })()}
-              </Text>
-              {isPrintItem(item) && (() => {
-                const meta = getPrintMeta(item);
-                return (
-                  <Text style={styles.printMeta}>
-                    {meta.pages} pages | {meta.colorMode === 'black_white' ? 'B/W' : 'Color'} | {meta.orientation}
+        <View style={styles.itemsContainer}>
+          <Text style={styles.itemsTitle}>Items ({items.length})</Text>
+          {items.slice(0, 3).map((item, index) => (
+            <View key={index} style={styles.itemRow}>
+              {isPrintItem(item) ? (
+                <View style={styles.printIcon}>
+                  <Ionicons name="document-text-outline" size={20} color="#007AFF" />
+                </View>
+              ) : (
+                <Image source={{ uri: item.image }} style={styles.itemImage} />
+              )}
+              <View style={styles.itemDetails}>
+                <View style={styles.itemTitleRow}>
+                  <Text style={styles.itemName}>
+                    {isPrintItem(item) ? getPrintFileName(item) : item.name}
                   </Text>
-                );
-              })()}
+                  {isPrintItem(item) && (
+                    <View style={styles.printBadge}>
+                      <Text style={styles.printBadgeText}>PRINT</Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={styles.itemPrice}>
+                  {(() => {
+                    if (isPrintItem(item)) {
+                      const meta = getPrintMeta(item);
+                      return `${meta.quantity} × ₹${meta.price} = ₹${(meta.quantity * meta.price).toFixed(2)}`;
+                    }
+                    const price = Number(item?.price ?? 0);
+                    const quantity = Number(item?.quantity ?? 0);
+                    return `${quantity} × ₹${price} = ₹${(quantity * price).toFixed(2)}`;
+                  })()}
+                </Text>
+                {isPrintItem(item) &&
+                  (() => {
+                    const meta = getPrintMeta(item);
+                    return (
+                      <Text style={styles.printMeta}>
+                        {meta.pages} pages | {meta.colorMode === 'black_white' ? 'B/W' : 'Color'} |{' '}
+                        {meta.orientation}
+                      </Text>
+                    );
+                  })()}
+              </View>
+              {item.status === ITEM_STATUS.SCANNED && (
+                <Ionicons name="checkmark-circle" size={20} color="#34C759" />
+              )}
             </View>
-            {item.status === ITEM_STATUS.SCANNED && (
-              <Ionicons name="checkmark-circle" size={20} color="#34C759" />
-            )}
-          </View>
-        ))}
-        {items.length > 3 && (
-          <Text style={styles.moreItems}>
-            +{items.length - 3} more items
-          </Text>
-        )}
-      </View>
+          ))}
+          {items.length > 3 && (
+            <Text style={styles.moreItems}>+{items.length - 3} more items</Text>
+          )}
+        </View>
 
       <View style={styles.orderInfo}>
         <View style={styles.infoRow}>
@@ -367,14 +622,6 @@ const OrderCard = ({ order }) => {
                     <TouchableOpacity onPress={() => handleCall(driverPhone)}>
                       <Ionicons name="call-outline" size={30} color="#007AFF" style={styles.callIcon} />
                     </TouchableOpacity>
-                  {/* <TouchableOpacity
-                    accessibilityLabel="Call driver"
-                    onPress={() => handleCall(driverPhone)}
-                    style={styles.callButton}
-                    hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
-                  >
-                    <Ionicons name="call-outline" size={30} color="#007AFF" />
-                  </TouchableOpacity> */}
                 </View>
               </View>
             ) : null}
@@ -389,6 +636,8 @@ const OrderCard = ({ order }) => {
       </View>
 
       {renderActionButtons()}
+        </>
+      )}
     </View>
   );
 };
@@ -405,6 +654,183 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 3.84,
     elevation: 5,
+  },
+  containerMinimal: {
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  minimalTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+    marginBottom: 8,
+  },
+  minimalTopText: {
+    flex: 1,
+    paddingRight: 8,
+  },
+  minimalHint: {
+    fontSize: 12,
+    color: '#8E8E93',
+    marginTop: 4,
+  },
+  cardFinalizeRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 10,
+  },
+  cardRackHalf: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: '#C5CCD6',
+    justifyContent: 'center',
+    minHeight: 52,
+  },
+  cardRackLabel: {
+    fontSize: 11,
+    color: '#666',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  cardRackValue: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111',
+  },
+  cardAssignHalf: {
+    flex: 1,
+    backgroundColor: '#34C759',
+    borderRadius: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    minHeight: 52,
+    paddingHorizontal: 8,
+  },
+  cardAssignHalfDisabled: {
+    backgroundColor: '#A8B0BC',
+  },
+  cardAssignHalfText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  rackPickModalCard: {
+    width: '100%',
+    maxWidth: 360,
+    maxHeight: '80%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    paddingBottom: 12,
+    overflow: 'hidden',
+  },
+  rackPickScroll: {
+    maxHeight: 360,
+    paddingHorizontal: 12,
+  },
+  rackPickGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingVertical: 8,
+    justifyContent: 'center',
+  },
+  rackPickOption: {
+    width: '18%',
+    minWidth: 52,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#F2F2F7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rackPickOptionSelected: {
+    backgroundColor: '#007AFF',
+  },
+  rackPickOptionText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#333',
+  },
+  rackPickOptionTextSelected: {
+    color: '#FFFFFF',
+  },
+  orderDetailsModalCard: {
+    width: '100%',
+    maxWidth: 380,
+    maxHeight: '88%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    paddingBottom: 8,
+    overflow: 'hidden',
+  },
+  orderDetailsScroll: {
+    paddingHorizontal: 16,
+    paddingTop: 4,
+    paddingBottom: 12,
+    maxHeight: 420,
+  },
+  detailsSectionTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#8E8E93',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  detailsSectionSpaced: {
+    marginTop: 14,
+  },
+  detailsLine: {
+    fontSize: 15,
+    color: '#1C1C1E',
+    marginTop: 4,
+  },
+  detailsLineStrong: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#000',
+    marginTop: 4,
+  },
+  detailsMeta: {
+    fontSize: 13,
+    color: '#666',
+    marginTop: 4,
+  },
+  detailsBlock: {
+    fontSize: 14,
+    color: '#333',
+    marginTop: 4,
+    lineHeight: 20,
+  },
+  detailsPhoneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 4,
+    gap: 12,
+  },
+  detailsDriverBlock: {
+    marginTop: 0,
+  },
+  detailsDoneButton: {
+    marginHorizontal: 16,
+    marginBottom: 12,
+    marginTop: 4,
+    backgroundColor: '#007AFF',
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  detailsDoneButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
   },
   header: {
     flexDirection: 'row',
@@ -454,6 +880,23 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '700',
+  },
+  compactActionsWrap: {
+    marginBottom: 0,
+  },
+  itemsModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E5E5',
+  },
+  itemsModalTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#000',
   },
   itemsContainer: {
     marginBottom: 12,

@@ -104,9 +104,9 @@ function ordersReducer(state, action) {
     
     case ACTIONS.ADD_ORDER:
       // Replace existing order if present, otherwise add new
-      // Normalize IDs to string to avoid number/string duplicates (e.g., 1520 vs '1520')
-      const newOrderKey = String(action.payload.orderId ?? action.payload.id ?? '');
-      const orders = state.orders.filter(o => String(o.orderId ?? o.id ?? '') !== newOrderKey);
+      // Normalize IDs so merges match the same row even when API mixes id / orderId types
+      const newOrderKey = extractOrderIdValue(action.payload);
+      const orders = state.orders.filter((o) => extractOrderIdValue(o) !== newOrderKey);
       return {
         ...state,
         orders: [action.payload, ...orders],
@@ -1362,6 +1362,29 @@ export function OrdersProvider({ children }) {
     }
   };
 
+  /** Persist selected package rack on the in-memory order (e.g. after picking, before assign driver). */
+  const mergeOrderPackageRack = React.useCallback((orderId, rack) => {
+    if (!orderId) return;
+    const targetKey = normalizeValue(orderId);
+    const rackValue = String(rack || '').trim();
+    if (!rackValue) return;
+    const existingOrder = ordersRef.current.find(
+      (o) => extractOrderIdValue(o) === targetKey
+    );
+    if (!existingOrder) {
+      console.warn('mergeOrderPackageRack: order not found', orderId);
+      return;
+    }
+    dispatch({
+      type: ACTIONS.ADD_ORDER,
+      payload: {
+        ...existingOrder,
+        packageRack: rackValue,
+        rackNumber: rackValue,
+      },
+    });
+  }, [dispatch]);
+
   const completeOrder = (orderId) => {
     updateOrderStatus(orderId, ORDER_STATUS.COMPLETED);
   };
@@ -1384,6 +1407,7 @@ export function OrdersProvider({ children }) {
     markItemUnavailable,
   persistItemScan,
     completePickingAndAssignDriver,
+    mergeOrderPackageRack,
     completeOrder,
     removeOrder,
     // Add method to manually register token if needed

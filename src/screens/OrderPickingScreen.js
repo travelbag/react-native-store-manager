@@ -31,6 +31,9 @@ const PACKAGE_RACK_OPTIONS = ['A', 'B', 'C', 'D'].flatMap((col) =>
   Array.from({ length: 15 }, (_, idx) => `${col}${idx + 1}`)
 );
 
+const sameOrderId = (o, routeOrderId) =>
+  String(o?.id ?? o?.orderId ?? '').trim() === String(routeOrderId ?? '').trim();
+
 const OrderPicking = ({ route, navigation }) => {
   const { orderId } = route.params;
   const { height: windowHeight } = useWindowDimensions();
@@ -41,6 +44,7 @@ const OrderPicking = ({ route, navigation }) => {
     markItemUnavailable,
     persistItemScan,
     completePickingAndAssignDriver,
+    mergeOrderPackageRack,
   } = useOrders();
   
   const [order, setOrder] = useState(null);
@@ -53,25 +57,42 @@ const OrderPicking = ({ route, navigation }) => {
   const [isPrinting, setIsPrinting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadingItemId, setDownloadingItemId] = useState(null);
+  const [pickingDetailItem, setPickingDetailItem] = useState(null);
   const [wedgeResume, setWedgeResume] = useState(0);
+  const autoRackPromptRef = useRef(false);
   const wedgeLockRef = useRef(false);
   const orderRef = useRef(null);
   const safeItemsRef = useRef([]);
 
   const isFocused = useIsFocused();
 
-  // Find the current order
+  // Find the current order (normalize id types so list updates always match this screen)
   useEffect(() => {
-    const currentOrder = orders.find(o => (o.id || o.orderId) === orderId);
+    const currentOrder = orders.find((o) => sameOrderId(o, orderId));
     setOrder(currentOrder);
   }, [orders, orderId]);
 
   useEffect(() => {
-    const rackFromOrder = String(order?.packageRack || '').trim();
+    const rackFromOrder = String(order?.packageRack || order?.rackNumber || '').trim();
     if (rackFromOrder) {
       setSelectedPackageRack(rackFromOrder);
     }
-  }, [order?.packageRack]);
+  }, [order?.packageRack, order?.rackNumber]);
+
+  useEffect(() => {
+    if (!allPickedOrUnavailable) {
+      autoRackPromptRef.current = false;
+      return;
+    }
+    if (autoRackPromptRef.current) return;
+    autoRackPromptRef.current = true;
+    const rackNow = String(
+      selectedPackageRack || order?.packageRack || order?.rackNumber || ''
+    ).trim();
+    if (!rackNow) {
+      setIsRackPickerVisible(true);
+    }
+  }, [allPickedOrUnavailable, selectedPackageRack, order?.packageRack, order?.rackNumber]);
 
   // Check for cancellation on screen focus and stop picking if cancelled
   useFocusEffect(
@@ -79,7 +100,7 @@ const OrderPicking = ({ route, navigation }) => {
       const checkOrderStatus = async () => {
         const latest = await refreshOrders(null, { force: true });
         const list = Array.isArray(latest) ? latest : [];
-        const currentOrder = list.find((o) => (o.id || o.orderId) === orderId);
+        const currentOrder = list.find((o) => sameOrderId(o, orderId));
         if (currentOrder && String(currentOrder.status || currentOrder.orderStatus || '').toLowerCase() === 'cancelled') {
           Alert.alert(
             'Order Cancelled',
@@ -467,25 +488,6 @@ const OrderPicking = ({ route, navigation }) => {
     }
   };
 
-  const getOrderStatusText = (status) => {
-    switch (normalizeStatus(status)) {
-      case normalizeStatus(ORDER_STATUS.PENDING):
-        return 'Pending';
-      case normalizeStatus(ORDER_STATUS.ACCEPTED):
-        return 'Accepted';
-      case normalizeStatus(ORDER_STATUS.PICKING):
-        return 'Picking Items';
-      case normalizeStatus(ORDER_STATUS.PREPARING):
-        return 'Preparing';
-      case normalizeStatus(ORDER_STATUS.COMPLETED):
-        return 'Completed';
-      case normalizeStatus(ORDER_STATUS.REJECTED):
-        return 'Rejected';
-      default:
-        return 'Pending'; // fallback to Pending if unknown
-    }
-  };
-
   if (!order) {
     return (
       <SafeAreaView style={styles.container}>
@@ -601,7 +603,50 @@ const OrderPicking = ({ route, navigation }) => {
     const barcodeValue = !printItem ? item.barcode : '';
     const quantity = Number(item?.quantity ?? 0);
     const price = Number(item?.price ?? 0);
-    const scannedLabel = printItem ? 'Just updated' : 'Just scanned';
+    if (item.status === ITEM_STATUS.SCANNED || item.status === ITEM_STATUS.UNAVAILABLE) {
+      const picked = item.status === ITEM_STATUS.SCANNED;
+      return (
+        <TouchableOpacity
+          style={[
+            styles.itemCardCompact,
+            picked ? styles.itemCardCompactPicked : styles.itemCardCompactUnavail,
+          ]}
+          onPress={() => setPickingDetailItem(item)}
+          activeOpacity={0.72}
+        >
+          <View style={styles.itemCardCompactRow}>
+            {printItem ? (
+              <View style={styles.itemThumbPrint}>
+                <Ionicons name="document-text-outline" size={22} color="#007AFF" />
+              </View>
+            ) : (
+              <Image source={{ uri: item.image }} style={styles.itemThumbImage} />
+            )}
+            <Text style={styles.itemCardCompactName} numberOfLines={2}>
+              {displayName}
+            </Text>
+            {picked ? (
+              <Ionicons name="checkmark-circle" size={26} color="#34C759" />
+            ) : (
+              <Ionicons name="close-circle" size={26} color="#FF3B30" />
+            )}
+          </View>
+          <Text
+            style={picked ? styles.itemCardCompactSub : styles.itemCardCompactSubUnavail}
+            numberOfLines={1}
+          >
+            {picked
+              ? printItem
+                ? `Printed${item.scannedAt ? ` · ${new Date(item.scannedAt).toLocaleTimeString()}` : ''}`
+                : `Picked ${item.pickedQuantity || item.quantity}/${item.quantity}`
+              : printItem
+                ? 'Cannot print'
+                : 'Not available'}
+          </Text>
+          <Text style={styles.itemCardCompactHint}>Tap for details</Text>
+        </TouchableOpacity>
+      );
+    }
 
     return (
       <View style={styles.itemCard}>
@@ -721,29 +766,6 @@ const OrderPicking = ({ route, navigation }) => {
               <Text style={styles.buttonText}>{printItem ? 'Cannot Print' : 'Not Available'}</Text>
             </TouchableOpacity>
           )}
-
-          {item.status === ITEM_STATUS.SCANNED && (
-            <View style={styles.completedIndicator}>
-              <Ionicons name="checkmark-circle" size={20} color="#34C759" />
-              <Text style={styles.completedText}>
-                {printItem
-                  ? `Printed ${item.quantity || 1}`
-                  : `Picked ${item.pickedQuantity || item.quantity}/${item.quantity}`}
-              </Text>
-              <Text style={styles.scannedTimeText}>
-                {item.scannedAt ? new Date(item.scannedAt).toLocaleTimeString() : scannedLabel}
-              </Text>
-            </View>
-          )}
-
-          {item.status === ITEM_STATUS.UNAVAILABLE && (
-            <View style={styles.unavailableIndicator}>
-              <Ionicons name="close-circle" size={20} color="#FF3B30" />
-              <Text style={styles.unavailableText}>
-                {printItem ? 'Cannot Print' : 'Not Available'}
-              </Text>
-            </View>
-          )}
         </View>
       </View>
     );
@@ -756,16 +778,16 @@ const OrderPicking = ({ route, navigation }) => {
   const previewMeta = previewItem ? getPrintMeta(previewItem) : null;
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <TextInput {...hardwareInputProps} />
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={24} color="#007AFF" />
         </TouchableOpacity>
         <View style={styles.headerInfo}>
-          <Text style={styles.headerTitle}>Order #{order.id || order.orderId}</Text>
-          <Text style={styles.headerSubtitle}>{order.customerName}</Text>
-          <Text style={styles.headerStatus}>{getOrderStatusText(order.status ?? order.orderStatus)}</Text>
+          <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
+            {String(order.id || order.orderId || '').trim()}
+          </Text>
         </View>
         <View style={styles.progressContainer}>
           <Text style={styles.progressText}>
@@ -900,6 +922,10 @@ const OrderPicking = ({ route, navigation }) => {
                   onPress={() => {
                     setSelectedPackageRack(rack);
                     setIsRackPickerVisible(false);
+                    const targetOrderId = order?.id || order?.orderId || orderId;
+                    if (targetOrderId) {
+                      mergeOrderPackageRack(targetOrderId, rack);
+                    }
                   }}
                 >
                   <Text
@@ -917,7 +943,67 @@ const OrderPicking = ({ route, navigation }) => {
         </Pressable>
       </Modal>
 
+      <Modal
+        transparent
+        visible={pickingDetailItem != null}
+        animationType="fade"
+        onRequestClose={() => setPickingDetailItem(null)}
+      >
+        <Pressable style={styles.pickingDetailBackdrop} onPress={() => setPickingDetailItem(null)}>
+          <Pressable style={styles.pickingDetailCard} onPress={() => {}}>
+            {pickingDetailItem ? (
+              <>
+                <Text style={styles.pickingDetailTitle}>
+                  {isPrintItem(pickingDetailItem)
+                    ? getPrintFileName(pickingDetailItem)
+                    : pickingDetailItem.name}
+                </Text>
+                {isPrintItem(pickingDetailItem) ? (
+                  <>
+                    <Text style={styles.pickingDetailLine}>
+                      Status:{' '}
+                      {pickingDetailItem.status === ITEM_STATUS.SCANNED ? 'Printed' : 'Unavailable'}
+                    </Text>
+                    <Text style={styles.pickingDetailLine}>
+                      Pages: {getPrintMeta(pickingDetailItem).pages} ·{' '}
+                      {getPrintMeta(pickingDetailItem).colorMode === 'black_white' ? 'B/W' : 'Color'} ·{' '}
+                      {getPrintMeta(pickingDetailItem).orientation}
+                    </Text>
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.pickingDetailLine}>Category: {pickingDetailItem.category || '—'}</Text>
+                    <Text style={styles.pickingDetailLine}>Barcode: {pickingDetailItem.barcode || '—'}</Text>
+                    <Text style={styles.pickingDetailLine}>
+                      Qty: {pickingDetailItem.quantity} × ${Number(pickingDetailItem.price ?? 0)} = $
+                      {(Number(pickingDetailItem.quantity ?? 0) * Number(pickingDetailItem.price ?? 0)).toFixed(2)}
+                    </Text>
+                    <Text style={styles.pickingDetailLine}>
+                      Location: {pickingDetailItem.rack?.location || 'N/A'} · Aisle:{' '}
+                      {pickingDetailItem.rack?.aisle || 'N/A'}
+                    </Text>
+                    {pickingDetailItem.rack?.description ? (
+                      <Text style={styles.pickingDetailLine}>{pickingDetailItem.rack.description}</Text>
+                    ) : null}
+                  </>
+                )}
+                {pickingDetailItem.scannedAt ? (
+                  <Text style={styles.pickingDetailMeta}>
+                    {pickingDetailItem.status === ITEM_STATUS.SCANNED ? 'Completed' : 'Updated'}:{' '}
+                    {new Date(pickingDetailItem.scannedAt).toLocaleString()}
+                  </Text>
+                ) : null}
+                <TouchableOpacity style={styles.pickingDetailClose} onPress={() => setPickingDetailItem(null)}>
+                  <Text style={styles.pickingDetailCloseText}>Close</Text>
+                </TouchableOpacity>
+              </>
+            ) : null}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       <FlatList
+        style={styles.pickList}
         data={safeItems}
         renderItem={renderItemCard}
         keyExtractor={(item, index) =>
@@ -928,85 +1014,86 @@ const OrderPicking = ({ route, navigation }) => {
             index,
           ].join(':')
         }
-        contentContainerStyle={{ padding: 16, paddingBottom: 24 }}
+        contentContainerStyle={styles.pickListContent}
+        ListFooterComponent={<View style={styles.listFooterSpacer} />}
       />
 
-      {canAssignDriver && (
-        <View style={styles.readyButtonContainer}>
-          <View style={styles.readyMessageContainer}>
-            <Ionicons name="checkmark-circle" size={24} color="#34C759" />
-            <Text style={styles.readyMessageText}>
-              All items processed! Assign a driver for delivery.
+      {canAssignDriver ? (
+        <View style={styles.bottomAssignBar}>
+          <View style={styles.readyRowTop}>
+            <Ionicons name="checkmark-circle" size={18} color="#34C759" />
+            <Text style={styles.readyMessageOneLine} numberOfLines={2}>
+              All items processed — pick rack, then assign driver.
             </Text>
           </View>
-          <TouchableOpacity
-            style={styles.rackSelector}
-            onPress={() => setIsRackPickerVisible(true)}
-          >
-            <View>
-              <Text style={styles.rackSelectorLabel}>Package Rack</Text>
-              <Text style={styles.rackSelectorValue}>
-                {selectedPackageRack || 'Choose rack'}
+          <View style={styles.readyActionsRow}>
+            <TouchableOpacity
+              style={styles.rackHalf}
+              onPress={() => setIsRackPickerVisible(true)}
+              activeOpacity={0.75}
+            >
+              <Text style={styles.rackHalfLabel}>Package rack</Text>
+              <Text style={styles.rackHalfValue} numberOfLines={1}>
+                {selectedPackageRack || 'Select…'}
               </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color="#007AFF" />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.markReadyButton, isAssigningDriver && styles.markReadyButtonDisabled]}
-            disabled={isAssigningDriver}
-            onPress={async () => {
-              try {
-                const targetOrderId = order.id || order.orderId || orderId;
-                if (!selectedPackageRack) {
-                  Alert.alert('Select package rack', 'Please select the package rack before assigning a driver.');
-                  return;
-                }
-                setIsAssigningDriver(true);
-                await completePickingAndAssignDriver(targetOrderId, selectedPackageRack);
-                Alert.alert(
-                  'Driver assigned ✅',
-                  `This order is assigned to a driver and stored at rack ${selectedPackageRack}.`,
-                  [
-                    {
-                      text: 'OK',
-                      onPress: () => {
-                        navigation.navigate('OrdersList', {
-                          selectedTab: ORDER_STATUS.ASSIGNED,
-                        });
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.assignHalf,
+                (!selectedPackageRack || isAssigningDriver) && styles.assignHalfDisabled,
+              ]}
+              disabled={!selectedPackageRack || isAssigningDriver}
+              onPress={async () => {
+                try {
+                  const targetOrderId = order.id || order.orderId || orderId;
+                  if (!selectedPackageRack) {
+                    Alert.alert(
+                      'Select package rack',
+                      'Please select the package rack before assigning a driver.'
+                    );
+                    return;
+                  }
+                  setIsAssigningDriver(true);
+                  await completePickingAndAssignDriver(targetOrderId, selectedPackageRack);
+                  Alert.alert(
+                    'Driver assigned ✅',
+                    `This order is assigned to a driver and stored at rack ${selectedPackageRack}.`,
+                    [
+                      {
+                        text: 'OK',
+                        onPress: () => {
+                          navigation.navigate('OrdersList', {
+                            selectedTab: ORDER_STATUS.ASSIGNED,
+                          });
+                        },
                       },
-                    },
-                  ]
-                );
-              } catch (error) {
-                const msg = error?.message || 'Failed to assign driver. Please try again.';
-                if (String(msg).toLowerCase().includes('no drivers')) {
-                  Alert.alert('No drivers available', 'Try again in a few minutes.', [{ text: 'OK' }]);
-                } else {
-                  Alert.alert('Error', msg, [{ text: 'OK' }]);
+                    ]
+                  );
+                } catch (error) {
+                  const msg = error?.message || 'Failed to assign driver. Please try again.';
+                  if (String(msg).toLowerCase().includes('no drivers')) {
+                    Alert.alert('No drivers available', 'Try again in a few minutes.', [{ text: 'OK' }]);
+                  } else {
+                    Alert.alert('Error', msg, [{ text: 'OK' }]);
+                  }
+                } finally {
+                  setIsAssigningDriver(false);
                 }
-              } finally {
-                setIsAssigningDriver(false);
-              }
-            }}
-          >
-            <Ionicons name="car-outline" size={20} color="#FFFFFF" />
-            <Text style={styles.markReadyButtonText}>
-              {isAssigningDriver ? 'Assigning…' : 'Assign Driver'}
-            </Text>
-          </TouchableOpacity>
+              }}
+            >
+              <Ionicons name="car-outline" size={18} color="#FFFFFF" />
+              <Text style={styles.assignHalfText}>
+                {isAssigningDriver ? 'Assigning…' : 'Assign'}
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      )}
+      ) : null}
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  headerStatus: {
-    fontSize: 13,
-    color: '#007AFF',
-    fontWeight: '600',
-    marginTop: 2,
-  },
   container: {
     flex: 1,
     backgroundColor: '#F2F2F7',
@@ -1014,7 +1101,8 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E5E5E5',
@@ -1022,16 +1110,13 @@ const styles = StyleSheet.create({
   headerInfo: {
     flex: 1,
     marginLeft: 12,
+    justifyContent: 'center',
+    minHeight: 28,
   },
   headerTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: 17,
+    fontWeight: '700',
     color: '#000000',
-  },
-  headerSubtitle: {
-    fontSize: 14,
-    color: '#666666',
-    marginTop: 2,
   },
   progressContainer: {
     backgroundColor: '#F0F0F0',
@@ -1075,6 +1160,119 @@ const styles = StyleSheet.create({
   },
   listContent: {
     padding: 16,
+  },
+  pickList: {
+    flex: 1,
+  },
+  pickListContent: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 20,
+  },
+  listFooterSpacer: {
+    height: 20,
+  },
+  itemCardCompact: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#E8E8ED',
+  },
+  itemCardCompactPicked: {
+    borderColor: '#C8E6C9',
+    backgroundColor: '#F4FBF5',
+  },
+  itemCardCompactUnavail: {
+    borderColor: '#F5C6C6',
+    backgroundColor: '#FFF8F8',
+  },
+  itemCardCompactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  itemThumbImage: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    backgroundColor: '#F0F0F0',
+  },
+  itemThumbPrint: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  itemCardCompactName: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111',
+  },
+  itemCardCompactSub: {
+    marginTop: 4,
+    fontSize: 12,
+    color: '#2E7D32',
+    fontWeight: '500',
+  },
+  itemCardCompactSubUnavail: {
+    marginTop: 4,
+    fontSize: 12,
+    color: '#C62828',
+    fontWeight: '500',
+  },
+  itemCardCompactHint: {
+    marginTop: 2,
+    fontSize: 11,
+    color: '#8E8E93',
+  },
+  pickingDetailBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  pickingDetailCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 18,
+    maxWidth: 400,
+    width: '100%',
+    alignSelf: 'center',
+  },
+  pickingDetailTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#111',
+    marginBottom: 12,
+  },
+  pickingDetailLine: {
+    fontSize: 14,
+    color: '#333',
+    marginBottom: 8,
+    lineHeight: 20,
+  },
+  pickingDetailMeta: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 4,
+    marginBottom: 14,
+  },
+  pickingDetailClose: {
+    backgroundColor: '#007AFF',
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  pickingDetailCloseText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
   },
   itemCard: {
     backgroundColor: '#FFFFFF',
@@ -1270,24 +1468,88 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 50,
   },
-  readyButtonContainer: {
-    padding: 16,
-    backgroundColor: '#F8F9FA',
-    borderTopWidth: 1,
-    borderTopColor: '#E5E5E5',
+  bottomAssignBar: {
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#C6C6C8',
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 4,
   },
-  readyMessageContainer: {
+  readyButtonContainer: {
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    marginTop: 8,
+    marginBottom: 8,
+    backgroundColor: '#EEF2F7',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#D8DEE6',
+  },
+  readyRowTop: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
+    gap: 8,
+    marginBottom: 10,
+  },
+  readyMessageOneLine: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1C1C1E',
+    lineHeight: 18,
+  },
+  readyActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 10,
+  },
+  rackHalf: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: '#C5CCD6',
+    justifyContent: 'center',
+    minHeight: 52,
+  },
+  rackHalfLabel: {
+    fontSize: 11,
+    color: '#666',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  rackHalfValue: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111',
+  },
+  assignHalf: {
+    flex: 1,
+    backgroundColor: '#34C759',
+    borderRadius: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    minHeight: 52,
     paddingHorizontal: 8,
   },
-  readyMessageText: {
-    fontSize: 16,
-    color: '#333333',
-    fontWeight: '600',
-    marginLeft: 8,
-    flex: 1,
+  assignHalfDisabled: {
+    backgroundColor: '#A8B0BC',
+  },
+  assignHalfText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
   },
   rackSelector: {
     backgroundColor: '#FFFFFF',

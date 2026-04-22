@@ -135,20 +135,28 @@ const OrdersScreen = ({ route, navigation }) => {
     return () => subscription.remove();
   }, [refreshOrders]);
 
+  const hideStatusBadge =
+    selectedFilter === ORDER_STATUS.ASSIGNED ||
+    selectedFilter === ORDER_STATUS.COMPLETED ||
+    selectedFilter === 'cancelled';
+
   const renderOrderItem = ({ item }) => (
-    <OrderCard order={{
-      ...item,
-      id: item?.id ?? item?.orderId ?? '',
-      status: item?.status ?? item?.orderStatus ?? 'N/A',
-      totalPrice: item?.totalPrice ?? item?.total ?? 0,
-      customerName: item?.customerName ?? '',
-      orderDate: item?.orderDate ?? item?.timestamp ?? '',
-      items: Array.isArray(item?.items)
-        ? item.items
-        : typeof item?.items === 'string'
-          ? (() => { try { return JSON.parse(item.items); } catch { return []; } })()
-          : [],
-    }} />
+    <OrderCard
+      hideStatusBadge={hideStatusBadge}
+      order={{
+        ...item,
+        id: item?.id ?? item?.orderId ?? '',
+        status: item?.status ?? item?.orderStatus ?? 'N/A',
+        totalPrice: item?.totalPrice ?? item?.total ?? 0,
+        customerName: item?.customerName ?? '',
+        orderDate: item?.orderDate ?? item?.timestamp ?? '',
+        items: Array.isArray(item?.items)
+          ? item.items
+          : typeof item?.items === 'string'
+            ? (() => { try { return JSON.parse(item.items); } catch { return []; } })()
+            : [],
+      }}
+    />
   );
 
   const renderFilterButton = (filter) => (
@@ -237,6 +245,7 @@ const OrdersScreen = ({ route, navigation }) => {
       </View>
 
       <FlatList
+        key={selectedFilter}
         data={filteredOrders}
         renderItem={renderOrderItem}
         keyExtractor={(item, index) => {
