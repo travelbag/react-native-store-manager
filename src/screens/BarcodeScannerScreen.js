@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -7,28 +7,35 @@ import {
   Alert,
   Vibration,
   TextInput,
+  Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useHardwareBarcodeWedge } from '../hooks/useHardwareBarcodeWedge';
 
 const BarcodeScannerScreen = ({ route, navigation }) => {
   const { orderId, itemId, expectedBarcode, itemName, requiredQuantity = 1 } = route.params;
   const [scanned, setScanned] = useState(false);
   const [pickedQuantity, setPickedQuantity] = useState(1);
   const [showQuantitySelector, setShowQuantitySelector] = useState(false);
+  const [wedgeResume, setWedgeResume] = useState(0);
   const cameraRef = useRef(null);
-  const hardwareInputRef = useRef(null);
-  const hardwareScanTimerRef = useRef(null);
   const scanLockRef = useRef(false);
   const successAlertOpenRef = useRef(false);
-  const [hardwareScanValue, setHardwareScanValue] = useState('');
+  const handleScannedValueRef = useRef(() => {});
 
-  const focusHardwareInput = () => {
-    setTimeout(() => {
-      hardwareInputRef.current?.focus();
-    }, 150);
-  };
+  // camera permissions (must run before wedge hook so `permission` is defined)
+  const [permission, requestPermission] = useCameraPermissions();
+
+  const wedgeEnabled = permission != null && !scanned;
+
+  const { hardwareInputProps, focusCapture } = useHardwareBarcodeWedge({
+    onBarcode: (data) => handleScannedValueRef.current(data),
+    enabled: wedgeEnabled,
+    resumeToken: wedgeResume,
+  });
 
   const resetScanner = () => {
     scanLockRef.current = false;
@@ -36,26 +43,13 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
     setScanned(false);
     setPickedQuantity(1);
     setShowQuantitySelector(false);
-    setHardwareScanValue('');
-    focusHardwareInput();
+    setWedgeResume((k) => k + 1);
   };
 
   // Reset scanner state when itemId changes (for multi-item scanning)
   useEffect(() => {
     resetScanner();
   }, [itemId]);
-
-  useEffect(() => {
-    focusHardwareInput();
-    return () => {
-      if (hardwareScanTimerRef.current) {
-        clearTimeout(hardwareScanTimerRef.current);
-      }
-    };
-  }, []);
-
-  // camera permissions
-  const [permission, requestPermission] = useCameraPermissions();
 
   useEffect(() => {
     if (!permission?.granted) {
@@ -93,6 +87,8 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
       );
     }
   };
+
+  handleScannedValueRef.current = handleScannedValue;
 
   const handleBarCodeScanned = ({ data }) => {
     handleScannedValue(data);
@@ -145,6 +141,18 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
     }
   };
 
+  useFocusEffect(
+    useCallback(() => {
+      // Dismiss soft keyboard from Order Picking (search fields, etc.) before wedge focus.
+      Keyboard.dismiss();
+      const t = setTimeout(() => {
+        // focusCapture no-ops when wedge is disabled (e.g. permission still loading).
+        focusCapture();
+      }, 60);
+      return () => clearTimeout(t);
+    }, [focusCapture])
+  );
+
   if (!permission) {
     return (
       <SafeAreaView style={styles.container}>
@@ -153,25 +161,29 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
     );
   }
 
-  if (!permission.granted) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.permissionContainer}>
-          <Ionicons name="camera-outline" size={64} color="#666" />
-          <Text style={styles.message}>Camera permission is required to scan barcodes</Text>
-          <TouchableOpacity
-            style={styles.button}
-            onPress={requestPermission}
-          >
-            <Text style={styles.buttonText}>Grant Permission</Text>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
   return (
     <SafeAreaView style={styles.container}>
+      <TextInput {...hardwareInputProps} />
+
+      {!permission.granted ? (
+        <View style={styles.permissionContainer}>
+          <Ionicons name="camera-outline" size={64} color="#666" />
+          <Text style={styles.permissionHint}>
+            HTA11 / laser scanner (keyboard wedge): pull the trigger — the barcode is captured automatically. You do not need the camera for that.
+          </Text>
+          <Text style={styles.message}>Allow the camera if you also want to scan visually as a backup.</Text>
+          <TouchableOpacity style={styles.button} onPress={requestPermission}>
+            <Text style={styles.buttonText}>Allow camera</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.button, styles.secondaryButton, styles.permissionCancel]}
+            onPress={() => navigation.goBack()}
+          >
+            <Text style={[styles.buttonText, styles.secondaryButtonText]}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <>
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.backButton}
@@ -190,46 +202,9 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
           <Text style={styles.quantityText}>Required: {requiredQuantity} items</Text>
         )}
         <Text style={styles.instructionText}>
-          Point your camera at the barcode or press the scanner trigger
+          Use your HTA11 trigger to scan, or point the camera at the barcode (backup).
         </Text>
       </View>
-
-      <TextInput
-        ref={hardwareInputRef}
-        value={hardwareScanValue}
-        onChangeText={(text) => {
-          setHardwareScanValue(text);
-
-          if (scanLockRef.current || successAlertOpenRef.current) {
-            return;
-          }
-
-          if (hardwareScanTimerRef.current) {
-            clearTimeout(hardwareScanTimerRef.current);
-          }
-
-          if (/[\n\r]/.test(text)) {
-            const cleaned = text.replace(/[\n\r]/g, '').trim();
-            setHardwareScanValue('');
-            handleScannedValue(cleaned);
-            return;
-          }
-
-          hardwareScanTimerRef.current = setTimeout(() => {
-            const cleaned = text.trim();
-            if (!cleaned) return;
-            setHardwareScanValue('');
-            handleScannedValue(cleaned);
-          }, 120);
-        }}
-        autoFocus
-        blurOnSubmit={false}
-        showSoftInputOnFocus={false}
-        autoCapitalize="none"
-        autoCorrect={false}
-        caretHidden
-        style={styles.hiddenHardwareInput}
-      />
 
       <View style={styles.scannerContainer}>
         <CameraView
@@ -300,6 +275,8 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
           <Text style={[styles.buttonText, styles.secondaryButtonText]}>Cancel</Text>
         </TouchableOpacity>
       </View>
+        </>
+      )}
     </SafeAreaView>
   );
 };
@@ -316,7 +293,15 @@ const styles = StyleSheet.create({
   itemName: { fontSize: 20, fontWeight: 'bold', color: '#FFFFFF', marginBottom: 8, textAlign: 'center' },
   quantityText: { fontSize: 16, color: '#FFD700', fontWeight: '600', marginBottom: 4 },
   instructionText: { fontSize: 14, color: '#CCCCCC', textAlign: 'center' },
-  hiddenHardwareInput: { position: 'absolute', width: 1, height: 1, opacity: 0 },
+  permissionHint: {
+    fontSize: 14,
+    color: '#CCCCCC',
+    textAlign: 'center',
+    marginBottom: 12,
+    paddingHorizontal: 12,
+    lineHeight: 20,
+  },
+  permissionCancel: { marginTop: 12 },
   scannerContainer: { flex: 1, position: 'relative' },
   scanner: { flex: 1 },
   overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
@@ -327,7 +312,7 @@ const styles = StyleSheet.create({
   buttonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
   secondaryButtonText: { color: '#CCCCCC' },
   permissionContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20 },
-  message: { fontSize: 16, color: '#666', textAlign: 'center', marginVertical: 20 },
+  message: { fontSize: 16, color: '#CCCCCC', textAlign: 'center', marginVertical: 20 },
   quantitySelectorContainer: { backgroundColor: 'rgba(0, 0, 0, 0.9)', padding: 20, borderRadius: 12, marginBottom: 12, alignItems: 'center' },
   quantitySelectorTitle: { fontSize: 18, fontWeight: '600', color: '#FFFFFF', marginBottom: 16, textAlign: 'center' },
   quantityControls: { flexDirection: 'row', alignItems: 'center', marginBottom: 20, gap: 20 },
