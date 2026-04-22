@@ -12,6 +12,8 @@ import {
   Linking,
   ActivityIndicator,
   DeviceEventEmitter,
+  ScrollView,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -25,6 +27,7 @@ const PACKAGE_RACK_OPTIONS = ['A', 'B', 'C', 'D'].flatMap((col) =>
 
 const OrderPicking = ({ route, navigation }) => {
   const { orderId } = route.params;
+  const { height: windowHeight } = useWindowDimensions();
   const { 
     orders, 
     refreshOrders,
@@ -62,8 +65,9 @@ const OrderPicking = ({ route, navigation }) => {
   useFocusEffect(
     React.useCallback(() => {
       const checkOrderStatus = async () => {
-        await refreshOrders(null, { force: true }); // Ensure latest data
-        const currentOrder = orders.find(o => (o.id || o.orderId) === orderId);
+        const latest = await refreshOrders(null, { force: true });
+        const list = Array.isArray(latest) ? latest : [];
+        const currentOrder = list.find((o) => (o.id || o.orderId) === orderId);
         if (currentOrder && String(currentOrder.status || currentOrder.orderStatus || '').toLowerCase() === 'cancelled') {
           Alert.alert(
             'Order Cancelled',
@@ -74,7 +78,7 @@ const OrderPicking = ({ route, navigation }) => {
       };
       checkOrderStatus();
       return () => {}; // Cleanup if needed
-    }, [orderId, orders, refreshOrders, navigation])
+    }, [orderId, refreshOrders, navigation])
   );
 
   // Get items array safely
@@ -751,7 +755,13 @@ const OrderPicking = ({ route, navigation }) => {
             <Text style={styles.rackPickerSubtitle}>
               Choose where the packed order is stored before assigning the driver.
             </Text>
-            <View style={styles.rackGrid}>
+            <ScrollView
+              style={[styles.rackGridScroll, { maxHeight: Math.min(420, windowHeight * 0.5) }]}
+              contentContainerStyle={styles.rackGrid}
+              showsVerticalScrollIndicator
+              keyboardShouldPersistTaps="handled"
+              nestedScrollEnabled
+            >
               {PACKAGE_RACK_OPTIONS.map((rack) => (
                 <TouchableOpacity
                   key={rack}
@@ -774,7 +784,7 @@ const OrderPicking = ({ route, navigation }) => {
                   </Text>
                 </TouchableOpacity>
               ))}
-            </View>
+            </ScrollView>
           </Pressable>
         </Pressable>
       </Modal>
@@ -1194,10 +1204,14 @@ const styles = StyleSheet.create({
     marginTop: 6,
     marginBottom: 14,
   },
+  rackGridScroll: {
+    flexGrow: 0,
+  },
   rackGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
+    paddingBottom: 4,
   },
   rackOption: {
     width: '18%',

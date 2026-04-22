@@ -1,5 +1,5 @@
 import React from "react";
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
 import { apiClient } from "../services/apiClient";
@@ -78,54 +78,68 @@ const ProfileScreen = ({ navigation }) => {
   };
 
   return (
-    <View style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Ionicons name="arrow-back" size={28} color="#000" />
+    <View style={styles.outer}>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator
+      >
+        {/* Header */}
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => navigation.goBack()}>
+            <Ionicons name="arrow-back" size={28} color="#000" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Profile</Text>
+          <View style={{ width: 28 }} />
+        </View>
+
+        {/* Profile Icon */}
+        <View style={styles.profileIconContainer}>
+          <Ionicons name="person-circle-outline" size={90} color="#51A2F8" />
+        </View>
+
+        {/* Profile Info */}
+        <View style={styles.infoBox}>
+          <View style={styles.row}>
+            <Text style={styles.label}>Name</Text>
+            <Text style={styles.value}>{manager?.name}</Text>
+          </View>
+
+          <View style={styles.separator} />
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Role</Text>
+            <Text style={styles.value}>{manager?.role || "Store Manager"}</Text>
+          </View>
+        </View>
+
+        {/* Buttons */}
+        <TouchableOpacity style={styles.deleteButton} onPress={handleDeleteAccount}>
+          <Text style={styles.deleteText}>Delete Account</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Profile</Text>
-        <View style={{ width: 28 }} />
-      </View>
 
-    {/* Profile Icon */}
-    <View style={styles.profileIconContainer}>
-    <Ionicons name="person-circle-outline" size={90} color="#51A2F8" />
-    </View>
-
-    {/* Profile Info */}
-    <View style={styles.infoBox}>
-    <View style={styles.row}>
-        <Text style={styles.label}>Name</Text>
-        <Text style={styles.value}>{manager?.name}</Text>
-    </View>
-
-    <View style={styles.separator} />
-
-    <View style={styles.row}>
-        <Text style={styles.label}>Role</Text>
-        <Text style={styles.value}>{manager?.role || "Store Manager"}</Text>
-    </View>
-    </View>
-
-      {/* Buttons */}
-      <TouchableOpacity style={styles.deleteButton} onPress={handleDeleteAccount}>
-        <Text style={styles.deleteText}>Delete Account</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity style={styles.logoutButton} onPress={handleSignOut}>
-        <Text style={styles.logoutText}>Sign Out</Text>
-      </TouchableOpacity>
+        <TouchableOpacity style={styles.logoutButton} onPress={handleSignOut}>
+          <Text style={styles.logoutText}>Sign Out</Text>
+        </TouchableOpacity>
+      </ScrollView>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
+  outer: {
     flex: 1,
+    backgroundColor: "#fff",
+  },
+  scroll: {
+    flex: 1,
+  },
+  scrollContent: {
     padding: 20,
     paddingTop: 50,
-    backgroundColor: "#fff",
+    paddingBottom: 32,
+    flexGrow: 1,
   },
   header: {
     flexDirection: "row",

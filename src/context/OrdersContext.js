@@ -622,6 +622,50 @@ export function OrdersProvider({ children }) {
     [schedulePendingOrderSoundAlert, emitNewOrderReceived],
   );
 
+  const fetchOrdersFromDB = React.useCallback(
+    async (status = null, source = 'manual') => {
+      if (!manager || !manager.storeId) {
+        console.error('❌ No storeId found for manager');
+        return [];
+      }
+      let endpoint = `/orders/by-store/${manager.storeId}`;
+      if (status) endpoint += `?status=${status}`;
+      try {
+        const response = await apiClient.get(endpoint);
+        const data = await response.json();
+
+        const rawOrders = data.orders || data || [];
+        const normalized = Array.isArray(rawOrders)
+          ? rawOrders.map(normalizeOrder).filter(Boolean)
+          : [];
+        return normalized.filter(isOrderVisibleToManager);
+      } catch (error) {
+        console.error('❌ Error fetching orders from DB:', error);
+        return [];
+      }
+    },
+    [manager, normalizeOrder, isOrderVisibleToManager],
+  );
+
+  const refreshOrders = React.useCallback(
+    async (status = null, options = {}) => {
+      try {
+        const { force = false } = options;
+        const now = Date.now();
+        if (!force && now - lastFetchAtRef.current < 1500) {
+          return ordersRef.current;
+        }
+        const orders = await fetchOrdersFromDB(status, 'manual');
+        applyOrdersSnapshot(orders);
+        return orders;
+      } catch (e) {
+        console.warn('⚠️ Failed to refresh orders:', e);
+        return [];
+      }
+    },
+    [applyOrdersSnapshot, fetchOrdersFromDB],
+  );
+
   useEffect(() => {
     // Start/stop foreground polling based on auth, manager, and app activity
     let cancelled = false;
@@ -670,7 +714,7 @@ export function OrdersProvider({ children }) {
       }, API_CONFIG.POLL_INTERVAL);
     };
 
-    if (isAuthenticated && manager && isAppActive) {
+    if (isAuthenticated && manager?.storeId && isAppActive) {
       // Ensure no interval remains
       if (syncIntervalRef.current) {
         clearInterval(syncIntervalRef.current);
@@ -698,7 +742,7 @@ export function OrdersProvider({ children }) {
     } else {
       // Stop polling if conditions are not met (logged out, manager missing, or app background)
       stopTimers();
-      if (!isAuthenticated || !manager) {
+      if (!isAuthenticated || !manager?.storeId) {
         NotificationService.removeNotificationListeners();
       }
     }
@@ -708,7 +752,7 @@ export function OrdersProvider({ children }) {
       cancelled = true;
       stopTimers();
     };
-  }, [isAuthenticated, manager, isAppActive, applyOrdersSnapshot]);
+  }, [isAuthenticated, manager?.storeId, isAppActive, applyOrdersSnapshot, fetchOrdersFromDB]);
 
   // Observe app state to pause polling when app goes to background/inactive
   useEffect(() => {
@@ -859,46 +903,6 @@ export function OrdersProvider({ children }) {
     };
   }, [dispatch, isAuthenticated, manager?.storeId]);
 
-// Fetch orders from backend DB by storeId and optional status
-const fetchOrdersFromDB = async (status = null, source = 'manual') => {
-  if (!manager || !manager.storeId) {
-    console.error('❌ No storeId found for manager');
-    return [];
-  }
-  let endpoint = `/orders/by-store/${manager.storeId}`;
-  if (status) endpoint += `?status=${status}`;
-  try {
-    const response = await apiClient.get(endpoint);
-    const data = await response.json();
-   
-
-    const rawOrders = data.orders || data || [];
-    const normalized = Array.isArray(rawOrders)
-      ? rawOrders.map(normalizeOrder).filter(Boolean)
-      : [];
-    return normalized.filter(isOrderVisibleToManager);
-  } catch (error) {
-    console.error('❌ Error fetching orders from DB:', error);
-    return [];
-  }
-};
-  // Public refresh helper to manually re-fetch orders
-  const refreshOrders = async (status = null, options = {}) => {
-    try {
-      const { force = false } = options;
-      // Debounce manual refreshes that occur too soon after a poll to reduce spam
-      const now = Date.now();
-      if (!force && now - lastFetchAtRef.current < 1500) {
-        return state.orders;
-      }
-      const orders = await fetchOrdersFromDB(status, 'manual');
-      applyOrdersSnapshot(orders);
-      return orders;
-    } catch (e) {
-      console.warn('⚠️ Failed to refresh orders:', e);
-      return [];
-    }
-  };
   // Helpers to control sync polling manually (exposed via context for advanced control)
   const stopSyncPolling = () => {
     if (syncIntervalRef.current) {
@@ -909,7 +913,7 @@ const fetchOrdersFromDB = async (status = null, source = 'manual') => {
 
   const startSyncPolling = () => {
     // Prefer timeout-based scheduler
-    if (isAuthenticated && manager && isAppActive) {
+    if (isAuthenticated && manager?.storeId && isAppActive) {
       if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
       pollTimeoutRef.current = setTimeout(async function scheduleManualStart() {
         if (isFetchingRef.current) {
