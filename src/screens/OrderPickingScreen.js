@@ -1,8 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, Alert } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
-import { useOrders, ORDER_STATUS, ITEM_STATUS } from '../context/OrdersContext';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
+  View,
+  Text,
+  Alert,
+  TextInput,
+  Keyboard,
+  Vibration,
   StyleSheet,
   FlatList,
   TouchableOpacity,
@@ -15,11 +18,14 @@ import {
   ScrollView,
   useWindowDimensions,
 } from 'react-native';
+import { useFocusEffect, useIsFocused } from '@react-navigation/native';
+import { useOrders, ORDER_STATUS, ITEM_STATUS } from '../context/OrdersContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Print from 'expo-print';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
+import { useHardwareBarcodeWedge } from '../hooks/useHardwareBarcodeWedge';
 
 const PACKAGE_RACK_OPTIONS = ['A', 'B', 'C', 'D'].flatMap((col) =>
   Array.from({ length: 15 }, (_, idx) => `${col}${idx + 1}`)
@@ -47,6 +53,12 @@ const OrderPicking = ({ route, navigation }) => {
   const [isPrinting, setIsPrinting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadingItemId, setDownloadingItemId] = useState(null);
+  const [wedgeResume, setWedgeResume] = useState(0);
+  const wedgeLockRef = useRef(false);
+  const orderRef = useRef(null);
+  const safeItemsRef = useRef([]);
+
+  const isFocused = useIsFocused();
 
   // Find the current order
   useEffect(() => {
@@ -98,6 +110,124 @@ const OrderPicking = ({ route, navigation }) => {
 
   // Filter out any null/undefined entries to avoid crashes in counts and render
   const safeItems = React.useMemo(() => (items || []).filter(Boolean), [items]);
+
+  orderRef.current = order;
+  safeItemsRef.current = safeItems;
+
+  const hasWedgePickLines = React.useMemo(
+    () =>
+      safeItems.some((item) => {
+        if (!item) return false;
+        const rawType = String(item.item_type || item.type || '').toLowerCase();
+        const printItem =
+          rawType === 'print' ||
+          Boolean(
+            item.fileUrl ||
+              item.file_url ||
+              item.printUrl ||
+              item.print_url ||
+              item.document_url ||
+              item.documentUrl
+          );
+        if (printItem) return false;
+        return (
+          item.status !== ITEM_STATUS.SCANNED && item.status !== ITEM_STATUS.UNAVAILABLE
+        );
+      }),
+    [safeItems]
+  );
+
+  const wedgeEnabled = Boolean(isFocused && order && hasWedgePickLines);
+
+  const checkOrderCompletion = React.useCallback(() => {
+    const list = safeItemsRef.current || [];
+    const allItemsProcessed = list.every(
+      (item) =>
+        item.status === ITEM_STATUS.SCANNED || item.status === ITEM_STATUS.UNAVAILABLE
+    );
+
+    if (allItemsProcessed && list.length > 0) {
+      Alert.alert(
+        'All Items Processed! ✅',
+        'All items have been picked or marked unavailable. You can now mark this order as READY.',
+        [{ text: 'OK' }]
+      );
+    }
+  }, []);
+
+  const handleWedgeBarcode = useCallback(
+    async (raw) => {
+      const data = String(raw || '').trim();
+      if (!data || wedgeLockRef.current) return;
+
+      const ord = orderRef.current;
+      const list = safeItemsRef.current || [];
+      if (!ord || !list.length) return;
+
+      const currentOrderId = ord.id || ord.orderId || orderId;
+      const candidates = list.filter((item) => {
+        if (!item) return false;
+        const rawType = String(item.item_type || item.type || '').toLowerCase();
+        const printItem =
+          rawType === 'print' ||
+          Boolean(
+            item.fileUrl ||
+              item.file_url ||
+              item.printUrl ||
+              item.print_url ||
+              item.document_url ||
+              item.documentUrl
+          );
+        if (printItem) return false;
+        if (item.status === ITEM_STATUS.SCANNED || item.status === ITEM_STATUS.UNAVAILABLE) {
+          return false;
+        }
+        const bc = String(item.barcode || '').trim();
+        return bc === data;
+      });
+
+      if (candidates.length === 0) {
+        Alert.alert('No match', `No open line uses barcode "${data}".`);
+        return;
+      }
+
+      const item = candidates[0];
+      wedgeLockRef.current = true;
+      const qty = Math.max(1, Number(item.quantity ?? 1));
+      const scannedAt = new Date().toISOString();
+
+      try {
+        await persistItemScan(currentOrderId, data, qty, scannedAt, null);
+      } catch (e) {
+        console.warn('⚠️ Persist scan failed, applying local state only:', e?.message);
+      }
+      updateItemStatus(currentOrderId, item.id, ITEM_STATUS.SCANNED, scannedAt, qty);
+      Vibration.vibrate(100);
+      setTimeout(() => {
+        checkOrderCompletion();
+        wedgeLockRef.current = false;
+        setWedgeResume((k) => k + 1);
+      }, 450);
+    },
+    [orderId, persistItemScan, updateItemStatus, checkOrderCompletion]
+  );
+
+  const { hardwareInputProps, focusCapture } = useHardwareBarcodeWedge({
+    onBarcode: (d) => {
+      handleWedgeBarcode(d);
+    },
+    enabled: wedgeEnabled,
+    resumeToken: wedgeResume,
+  });
+
+  useFocusEffect(
+    React.useCallback(() => {
+      Keyboard.dismiss();
+      setWedgeResume((k) => k + 1);
+      const t = setTimeout(() => focusCapture(), 80);
+      return () => clearTimeout(t);
+    }, [focusCapture])
+  );
 
   useEffect(() => {
     const currentOrderId = String(order?.id || order?.orderId || orderId || '').trim();
@@ -435,7 +565,8 @@ const OrderPicking = ({ route, navigation }) => {
     );
   };
 
-  const handleScanItem = (item) => {
+  const handleScanItem = (item, options = {}) => {
+    const useCamera = options.useCamera === true;
     const currentOrderId = order?.id || order?.orderId || orderId;
     navigation.navigate('BarcodeScanner', {
       orderId: currentOrderId,
@@ -443,6 +574,7 @@ const OrderPicking = ({ route, navigation }) => {
       expectedBarcode: item.barcode,
       itemName: item.productName || item.name,
       requiredQuantity: item.quantity,
+      scanWithCamera: useCamera,
       onScanSuccess: async (scannedBarcode, quantity) => {
         try {
           await persistItemScan(
@@ -459,22 +591,6 @@ const OrderPicking = ({ route, navigation }) => {
         setTimeout(checkOrderCompletion, 100);
       },
     });
-  };
-
-  const checkOrderCompletion = () => {
-    const allItemsProcessed = safeItems.every(
-      item =>
-        item.status === ITEM_STATUS.SCANNED ||
-        item.status === ITEM_STATUS.UNAVAILABLE
-    );
-
-    if (allItemsProcessed && safeItems.length > 0) {
-      Alert.alert(
-        'All Items Processed! ✅',
-        'All items have been picked or marked unavailable. You can now mark this order as READY.',
-        [{ text: 'OK' }]
-      );
-    }
   };
 
   const renderItemCard = ({ item }) => {
@@ -584,13 +700,15 @@ const OrderPicking = ({ route, navigation }) => {
                 </TouchableOpacity>
               )}
 
-              <TouchableOpacity
-                style={styles.scanButton}
-                onPress={() => handleScanItem(item)}
-              >
-                <Ionicons name="scan" size={16} color="#FFFFFF" />
-                <Text style={styles.buttonText}>Scan</Text>
-              </TouchableOpacity>
+              {item.status !== ITEM_STATUS.SCANNED && item.status !== ITEM_STATUS.UNAVAILABLE && (
+                <TouchableOpacity
+                  style={styles.cameraScanButton}
+                  onPress={() => handleScanItem(item, { useCamera: true })}
+                >
+                  <Ionicons name="camera-outline" size={16} color="#FFFFFF" />
+                  <Text style={styles.buttonText}>Camera</Text>
+                </TouchableOpacity>
+              )}
             </>
           )}
 
@@ -639,6 +757,7 @@ const OrderPicking = ({ route, navigation }) => {
 
   return (
     <SafeAreaView style={styles.container}>
+      <TextInput {...hardwareInputProps} />
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={24} color="#007AFF" />
@@ -663,6 +782,15 @@ const OrderPicking = ({ route, navigation }) => {
           ]} 
         />
       </View>
+
+      {hasWedgePickLines ? (
+        <View style={styles.scannerHintBanner}>
+          <Ionicons name="barcode-outline" size={18} color="#0F5132" />
+          <Text style={styles.scannerHintText}>
+            Scanner ready — scan each product barcode here. Use Camera on a row only if you need the phone camera.
+          </Text>
+        </View>
+      ) : null}
 
       <Modal
         transparent
@@ -927,6 +1055,24 @@ const styles = StyleSheet.create({
     backgroundColor: '#34C759',
     borderRadius: 2,
   },
+  scannerHintBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 4,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#D1E7DD',
+    borderRadius: 8,
+  },
+  scannerHintText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#0F5132',
+    lineHeight: 18,
+  },
   listContent: {
     padding: 16,
   },
@@ -1036,6 +1182,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#34C759',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+    gap: 4,
+  },
+  cameraScanButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#5856D6',
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 6,

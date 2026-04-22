@@ -16,7 +16,14 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useHardwareBarcodeWedge } from '../hooks/useHardwareBarcodeWedge';
 
 const BarcodeScannerScreen = ({ route, navigation }) => {
-  const { orderId, itemId, expectedBarcode, itemName, requiredQuantity = 1 } = route.params;
+  const {
+    orderId,
+    itemId,
+    expectedBarcode,
+    itemName,
+    requiredQuantity = 1,
+    scanWithCamera = false,
+  } = route.params || {};
   const [scanned, setScanned] = useState(false);
   const [pickedQuantity, setPickedQuantity] = useState(1);
   const [showQuantitySelector, setShowQuantitySelector] = useState(false);
@@ -51,11 +58,12 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
     resetScanner();
   }, [itemId]);
 
+  // Only prompt for camera when the user explicitly chose "Camera" on the picking screen.
   useEffect(() => {
-    if (!permission?.granted) {
+    if (scanWithCamera && permission && !permission.granted) {
       requestPermission();
     }
-  }, [permission]);
+  }, [scanWithCamera, permission, requestPermission]);
 
   const handleScannedValue = (rawData) => {
     if (scanLockRef.current || successAlertOpenRef.current) {
@@ -167,14 +175,28 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
 
       {!permission.granted ? (
         <View style={styles.permissionContainer}>
-          <Ionicons name="camera-outline" size={64} color="#666" />
-          <Text style={styles.permissionHint}>
-            HTA11 / laser scanner (keyboard wedge): pull the trigger — the barcode is captured automatically. You do not need the camera for that.
-          </Text>
-          <Text style={styles.message}>Allow the camera if you also want to scan visually as a backup.</Text>
-          <TouchableOpacity style={styles.button} onPress={requestPermission}>
-            <Text style={styles.buttonText}>Allow camera</Text>
-          </TouchableOpacity>
+          <Ionicons name={scanWithCamera ? 'camera-outline' : 'barcode-outline'} size={64} color="#666" />
+          <Text style={styles.permissionItemTitle}>{itemName}</Text>
+          {scanWithCamera ? (
+            <>
+              <Text style={styles.permissionHint}>
+                Camera is used to scan this barcode. Allow access to continue, or go back and use the handheld scanner on the picking list instead.
+              </Text>
+              <TouchableOpacity style={styles.button} onPress={requestPermission}>
+                <Text style={styles.buttonText}>Allow camera</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <Text style={styles.permissionHint}>
+                Your handheld scanner is active here — pull the trigger to scan. You do not need the camera.
+              </Text>
+              <Text style={styles.message}>Use the phone camera only if you do not have a scanner.</Text>
+              <TouchableOpacity style={styles.button} onPress={requestPermission}>
+                <Text style={styles.buttonText}>Use phone camera</Text>
+              </TouchableOpacity>
+            </>
+          )}
           <TouchableOpacity
             style={[styles.button, styles.secondaryButton, styles.permissionCancel]}
             onPress={() => navigation.goBack()}
@@ -202,7 +224,9 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
           <Text style={styles.quantityText}>Required: {requiredQuantity} items</Text>
         )}
         <Text style={styles.instructionText}>
-          Use your HTA11 trigger to scan, or point the camera at the barcode (backup).
+          {scanWithCamera
+            ? 'Point the camera at the barcode, or scan with your handheld scanner.'
+            : 'Use your handheld scanner, or point the camera at the barcode.'}
         </Text>
       </View>
 
@@ -302,6 +326,14 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   permissionCancel: { marginTop: 12 },
+  permissionItemTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    textAlign: 'center',
+    marginBottom: 10,
+    paddingHorizontal: 16,
+  },
   scannerContainer: { flex: 1, position: 'relative' },
   scanner: { flex: 1 },
   overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
