@@ -93,6 +93,18 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
     };
   };
 
+  /** Product shelf rack (not package rack) — same sources as picking screen */
+  const getItemRackLabel = (item) => {
+    const rack = String(
+      item?.product_racknumber ||
+        item?.rack?.location ||
+        item?.rack_number ||
+        item?.rackNumber ||
+        ''
+    ).trim();
+    return rack || '—';
+  };
+
 
   const getStatusColor = (status) => {
     switch (status) {
@@ -277,6 +289,113 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
       </View>
     ));
 
+  /** Image + rack only (no product name) — reused for accepted strip & pending top row */
+  const renderRackThumbStripCells = () => {
+    if (!items.length) {
+      return (
+        <View style={styles.compactThumbCell}>
+          <View style={styles.compactThumbPlaceholder} />
+          <Text style={styles.compactThumbRack} numberOfLines={2}>
+            —
+          </Text>
+        </View>
+      );
+    }
+    return items.map((item, index) => (
+      <View key={index} style={styles.compactThumbCell}>
+        {isPrintItem(item) ? (
+          <View style={styles.compactThumbPrint}>
+            <Ionicons name="document-text-outline" size={22} color="#007AFF" />
+          </View>
+        ) : (
+          <Image source={{ uri: item.image }} style={styles.compactThumbImage} />
+        )}
+        <Text style={styles.compactThumbRack} numberOfLines={2}>
+          {getItemRackLabel(item)}
+        </Text>
+      </View>
+    ));
+  };
+
+  /** Pending + accepted compact card: full-width thumb + rack row (slide for more) */
+  const renderCompactRackThumbRow = () => (
+    <View style={styles.compactRackRowOuter}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={items.length > 2}
+        keyboardShouldPersistTaps="handled"
+        style={styles.compactRackRowScroll}
+        contentContainerStyle={styles.compactRackRowContent}
+      >
+        {renderRackThumbStripCells()}
+      </ScrollView>
+      {items.length > 1 ? (
+        <View style={styles.compactRackRowChevron} pointerEvents="none">
+          <Ionicons name="chevron-forward" size={22} color="#8E8E93" />
+        </View>
+      ) : null}
+    </View>
+  );
+
+  /** Accepted-tab details modal: image + name (+ line details) on left, rack on the right */
+  const renderAcceptedDetailsItemsList = () =>
+    items.map((item, index) => (
+      <View key={index} style={styles.acceptedDetailsItemWrap}>
+        <View style={styles.acceptedDetailsItemRow}>
+          <View style={styles.acceptedDetailsLeftCluster}>
+            {isPrintItem(item) ? (
+              <View style={styles.printIcon}>
+                <Ionicons name="document-text-outline" size={20} color="#007AFF" />
+              </View>
+            ) : (
+              <Image source={{ uri: item.image }} style={styles.itemImage} />
+            )}
+            <View style={styles.acceptedDetailsTextCol}>
+              <View style={styles.itemTitleRow}>
+                <Text style={styles.itemName} numberOfLines={3}>
+                  {isPrintItem(item) ? getPrintFileName(item) : item.name}
+                </Text>
+                {isPrintItem(item) ? (
+                  <View style={styles.printBadge}>
+                    <Text style={styles.printBadgeText}>PRINT</Text>
+                  </View>
+                ) : null}
+              </View>
+              <Text style={styles.itemPrice}>
+                {(() => {
+                  if (isPrintItem(item)) {
+                    const meta = getPrintMeta(item);
+                    return `${meta.quantity} × ₹${meta.price} = ₹${(meta.quantity * meta.price).toFixed(2)}`;
+                  }
+                  const price = Number(item?.price ?? 0);
+                  const quantity = Number(item?.quantity ?? 0);
+                  return `${quantity} × ₹${price} = ₹${(quantity * price).toFixed(2)}`;
+                })()}
+              </Text>
+              {isPrintItem(item) ? (
+                (() => {
+                  const meta = getPrintMeta(item);
+                  return (
+                    <Text style={styles.printMeta}>
+                      {meta.pages} pages | {meta.colorMode === 'black_white' ? 'B/W' : 'Color'} | {meta.orientation}
+                    </Text>
+                  );
+                })()
+              ) : null}
+            </View>
+          </View>
+          <View style={styles.acceptedDetailsRackCol}>
+            <Text style={styles.acceptedDetailsRackRight} numberOfLines={2}>
+              {getItemRackLabel(item)}
+            </Text>
+            {item.status === ITEM_STATUS.SCANNED ? (
+              <Ionicons name="checkmark-circle" size={18} color="#34C759" style={styles.acceptedDetailsPickIcon} />
+            ) : null}
+          </View>
+        </View>
+      </View>
+    ));
+
   const renderAcceptedActions = () => {
     if (!allItemsFinalized) {
       return (
@@ -334,71 +453,101 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
     }
   };
 
-  const renderOrderDetailsBody = () => (
-    <>
-      <Text style={styles.detailsSectionTitle}>Customer</Text>
-      <Text style={styles.detailsLine}>{customerName || '—'}</Text>
-      <Text style={styles.detailsMeta}>Placed {formatDateTime(timestamp) || '—'}</Text>
-      <Text style={styles.detailsMeta}>Status: {getStatusText(status)}</Text>
-
-      <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Total</Text>
-      <Text style={styles.detailsLineStrong}>₹{total}</Text>
-
-      <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Address</Text>
-      <Text style={styles.detailsBlock}>{deliveryAddress || '—'}</Text>
-
-      <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Phone</Text>
-      <View style={styles.detailsPhoneRow}>
-        <Text style={styles.detailsLine}>{phoneNumber || '—'}</Text>
-        {phoneNumber ? (
-          <TouchableOpacity onPress={() => handleCall(phoneNumber)} hitSlop={10}>
-            <Ionicons name="call-outline" size={22} color="#007AFF" />
-          </TouchableOpacity>
-        ) : null}
-      </View>
-
-      {deliveryType ? (
+  const renderOrderDetailsBody = () => {
+    if (statusNormalized === 'accepted') {
+      return (
         <>
-          <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Delivery</Text>
-          <Text style={styles.detailsLine}>{deliveryType}</Text>
-        </>
-      ) : null}
+          <Text style={styles.detailsSectionTitle}>Items ({items.length})</Text>
+          {renderAcceptedDetailsItemsList()}
 
-      {hasAssignedRack ? (
-        <>
-          <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Package rack</Text>
-          <Text style={styles.detailsLineStrong}>{packageRack}</Text>
-        </>
-      ) : null}
+          <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Customer</Text>
+          <Text style={styles.detailsLine}>{customerName || '—'}</Text>
 
-      {(driverName || driverPhone) && String(status || '').toLowerCase() === 'assigned' ? (
-        <View style={styles.detailsDriverBlock}>
-          <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Driver</Text>
-          <Text style={styles.detailsLine}>{driverName || 'Assigned'}</Text>
-          {driverPhone ? (
-            <View style={styles.detailsPhoneRow}>
-              <Text style={styles.detailsLine}>{driverPhone}</Text>
-              <TouchableOpacity onPress={() => handleCall(driverPhone)} hitSlop={10}>
+          <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Phone</Text>
+          <View style={styles.detailsPhoneRow}>
+            <Text style={styles.detailsLine}>{phoneNumber || '—'}</Text>
+            {phoneNumber ? (
+              <TouchableOpacity onPress={() => handleCall(phoneNumber)} hitSlop={10}>
                 <Ionicons name="call-outline" size={22} color="#007AFF" />
               </TouchableOpacity>
-            </View>
+            ) : null}
+          </View>
+
+          <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Address</Text>
+          <Text style={styles.detailsBlock}>{deliveryAddress || '—'}</Text>
+
+          <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Total</Text>
+          <Text style={styles.detailsLineStrong}>₹{total}</Text>
+        </>
+      );
+    }
+
+    return (
+      <>
+        <Text style={styles.detailsSectionTitle}>Customer</Text>
+        <Text style={styles.detailsLine}>{customerName || '—'}</Text>
+        <Text style={styles.detailsMeta}>Placed {formatDateTime(timestamp) || '—'}</Text>
+        <Text style={styles.detailsMeta}>Status: {getStatusText(status)}</Text>
+
+        <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Total</Text>
+        <Text style={styles.detailsLineStrong}>₹{total}</Text>
+
+        <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Address</Text>
+        <Text style={styles.detailsBlock}>{deliveryAddress || '—'}</Text>
+
+        <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Phone</Text>
+        <View style={styles.detailsPhoneRow}>
+          <Text style={styles.detailsLine}>{phoneNumber || '—'}</Text>
+          {phoneNumber ? (
+            <TouchableOpacity onPress={() => handleCall(phoneNumber)} hitSlop={10}>
+              <Ionicons name="call-outline" size={22} color="#007AFF" />
+            </TouchableOpacity>
           ) : null}
         </View>
-      ) : null}
 
-      {specialInstructions ? (
-        <>
-          <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Instructions</Text>
-          <Text style={styles.detailsBlock}>{specialInstructions}</Text>
-        </>
-      ) : null}
+        {deliveryType ? (
+          <>
+            <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Delivery</Text>
+            <Text style={styles.detailsLine}>{deliveryType}</Text>
+          </>
+        ) : null}
 
-      <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>
-        Items ({items.length})
-      </Text>
-      {renderItemsList()}
-    </>
-  );
+        {hasAssignedRack ? (
+          <>
+            <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Package rack</Text>
+            <Text style={styles.detailsLineStrong}>{packageRack}</Text>
+          </>
+        ) : null}
+
+        {(driverName || driverPhone) && String(status || '').toLowerCase() === 'assigned' ? (
+          <View style={styles.detailsDriverBlock}>
+            <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Driver</Text>
+            <Text style={styles.detailsLine}>{driverName || 'Assigned'}</Text>
+            {driverPhone ? (
+              <View style={styles.detailsPhoneRow}>
+                <Text style={styles.detailsLine}>{driverPhone}</Text>
+                <TouchableOpacity onPress={() => handleCall(driverPhone)} hitSlop={10}>
+                  <Ionicons name="call-outline" size={22} color="#007AFF" />
+                </TouchableOpacity>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
+        {specialInstructions ? (
+          <>
+            <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Instructions</Text>
+            <Text style={styles.detailsBlock}>{specialInstructions}</Text>
+          </>
+        ) : null}
+
+        <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>
+          Items ({items.length})
+        </Text>
+        {renderItemsList()}
+      </>
+    );
+  };
 
   return (
     <View style={[styles.container, useCompactItems && styles.containerMinimal]}>
@@ -499,16 +648,14 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
       {useCompactItems ? (
         <>
           <Pressable
-            style={styles.minimalTopRow}
+            style={styles.compactOrderIdPress}
             onPress={() => setDetailsModalVisible(true)}
-            android_ripple={{ color: '#E5E5E5' }}
+            android_ripple={{ color: '#E5E5EA' }}
           >
-            <View style={styles.minimalTopText}>
-              <Text style={styles.orderId}>Order #{orderId}</Text>
-              <Text style={styles.minimalHint}>Tap for customer, address, items & total</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color="#8E8E93" />
+            <Text style={styles.compactOrderIdText}>Order #{orderId}</Text>
+            <Text style={styles.compactOrderIdHint}>Tap for customer, products & total</Text>
           </Pressable>
+          {renderCompactRackThumbRow()}
           <View style={styles.compactActionsWrap}>{renderActionButtons()}</View>
         </>
       ) : (
@@ -659,20 +806,90 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 14,
   },
-  minimalTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 4,
-    marginBottom: 8,
+  compactOrderIdPress: {
+    width: '100%',
+    marginBottom: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#C5CCD6',
+    borderRadius: 10,
+    backgroundColor: '#FAFAFA',
   },
-  minimalTopText: {
-    flex: 1,
-    paddingRight: 8,
+  compactOrderIdText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#000000',
   },
-  minimalHint: {
-    fontSize: 12,
+  compactOrderIdHint: {
+    fontSize: 11,
     color: '#8E8E93',
     marginTop: 4,
+    fontWeight: '500',
+  },
+  compactRackRowOuter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    paddingLeft: 6,
+    paddingVertical: 6,
+    paddingRight: 4,
+  },
+  compactRackRowScroll: {
+    flex: 1,
+    minWidth: 0,
+    maxHeight: 86,
+  },
+  compactRackRowChevron: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingLeft: 2,
+    paddingRight: 2,
+    opacity: 0.95,
+  },
+  compactRackRowContent: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: 2,
+    paddingRight: 8,
+  },
+  compactThumbCell: {
+    width: 58,
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  compactThumbImage: {
+    width: 48,
+    height: 48,
+    borderRadius: 8,
+    backgroundColor: '#ECECEC',
+  },
+  compactThumbPrint: {
+    width: 48,
+    height: 48,
+    borderRadius: 8,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  compactThumbPlaceholder: {
+    width: 48,
+    height: 48,
+    borderRadius: 8,
+    backgroundColor: '#ECECEC',
+  },
+  compactThumbRack: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#007AFF',
+    textAlign: 'center',
+    marginTop: 4,
+    width: '100%',
   },
   cardFinalizeRow: {
     flexDirection: 'row',
@@ -962,6 +1179,44 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#007AFF',
     marginTop: 2,
+  },
+  acceptedDetailsItemWrap: {
+    marginBottom: 4,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E5E5E5',
+  },
+  acceptedDetailsItemRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+  },
+  acceptedDetailsLeftCluster: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    minWidth: 0,
+    marginRight: 10,
+  },
+  acceptedDetailsTextCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  acceptedDetailsRackCol: {
+    alignItems: 'flex-end',
+    justifyContent: 'flex-start',
+    maxWidth: '32%',
+    flexShrink: 0,
+    paddingTop: 2,
+  },
+  acceptedDetailsRackRight: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#007AFF',
+    textAlign: 'right',
+  },
+  acceptedDetailsPickIcon: {
+    marginTop: 4,
   },
   moreItems: {
     fontSize: 12,
