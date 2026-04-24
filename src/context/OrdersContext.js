@@ -493,6 +493,23 @@ export function OrdersProvider({ children }) {
         }
 
         const backendItemId = item?.id ?? item?.item_id ?? item?.itemId ?? null;
+        const productRack = String(
+          item?.product_racknumber ??
+            item?.rack_number ??
+            item?.rackNumber ??
+            item?.racknumber ??
+            ''
+        ).trim();
+        const existingRack = item?.rack && typeof item.rack === 'object' ? item.rack : {};
+        const rackLocation =
+          productRack ||
+          String(existingRack?.location ?? existingRack?.Location ?? '').trim() ||
+          '—';
+        const rack = {
+          ...existingRack,
+          location: rackLocation,
+        };
+
         return {
           id: createLocalItemId(orderId, item, idx, 'product'),
           backendItemId,
@@ -504,7 +521,8 @@ export function OrdersProvider({ children }) {
           barcode: item.barcode ?? item.item_barcode ?? '',
           image: item.image ?? '',
           category: item.type ?? item.category ?? '',
-          rack: item.rack ?? {},
+          rack,
+          product_racknumber: productRack || null,
           status: scanned ? ITEM_STATUS.SCANNED : (item.status && Object.values(ITEM_STATUS).includes(item.status) ? item.status : ITEM_STATUS.PENDING),
           weight: item.weight ?? item.selectedWeight ?? '',
           mrp: item.mrp ?? item.mrp_price ?? item.mrpPrice ?? '',

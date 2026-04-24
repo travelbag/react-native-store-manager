@@ -535,9 +535,16 @@ const OrderPicking = ({ route, navigation }) => {
   const handleLocateItem = (item) => {
     updateItemStatus(orderId, item.id, ITEM_STATUS.LOCATED);
     const rack = item.rack || {};
+    const rackLabel = String(
+      item?.product_racknumber ||
+        rack?.location ||
+        item?.rack_number ||
+        item?.rackNumber ||
+        ''
+    ).trim();
     Alert.alert(
       'Navigate to Item',
-      `📍 ${item.name}\n\n🏪 Location: ${rack.location}\n📍 Aisle: ${rack.aisle}\n📝 Description: ${rack.description}`,
+      `📍 ${item.name}\n\n🧭 Rack: ${rackLabel || '—'}\n📍 Aisle: ${rack.aisle || '—'}\n📝 Description: ${rack.description || '—'}`,
       [
         { text: 'Got it!', style: 'default' },
         { 
@@ -692,10 +699,17 @@ const OrderPicking = ({ route, navigation }) => {
           <View style={styles.rackInfo}>
             <View style={styles.rackHeader}>
               <Ionicons name="location" size={16} color="#007AFF" />
-              <Text style={styles.rackTitle}>Location: {item.rack?.location || 'N/A'}</Text>
+              <Text style={styles.rackTitle}>
+                Rack:{' '}
+                {String(
+                  item?.product_racknumber || item?.rack?.location || item?.rack_number || item?.rackNumber || ''
+                ).trim() || '—'}
+              </Text>
             </View>
-            <Text style={styles.rackAisle}>{item.rack?.aisle || 'N/A'}</Text>
-            <Text style={styles.rackDescription}>{item.rack?.description || 'N/A'}</Text>
+            {item?.rack?.aisle ? <Text style={styles.rackAisle}>{item.rack.aisle}</Text> : null}
+            {item?.rack?.description ? (
+              <Text style={styles.rackDescription}>{item.rack.description}</Text>
+            ) : null}
           </View>
         )}
 
@@ -979,8 +993,17 @@ const OrderPicking = ({ route, navigation }) => {
                       {(Number(pickingDetailItem.quantity ?? 0) * Number(pickingDetailItem.price ?? 0)).toFixed(2)}
                     </Text>
                     <Text style={styles.pickingDetailLine}>
-                      Location: {pickingDetailItem.rack?.location || 'N/A'} · Aisle:{' '}
-                      {pickingDetailItem.rack?.aisle || 'N/A'}
+                      Rack:{' '}
+                      {String(
+                        pickingDetailItem?.product_racknumber ||
+                          pickingDetailItem?.rack?.location ||
+                          pickingDetailItem?.rack_number ||
+                          pickingDetailItem?.rackNumber ||
+                          ''
+                      ).trim() || '—'}
+                      {pickingDetailItem?.rack?.aisle
+                        ? ` · Aisle: ${pickingDetailItem.rack.aisle}`
+                        : ''}
                     </Text>
                     {pickingDetailItem.rack?.description ? (
                       <Text style={styles.pickingDetailLine}>{pickingDetailItem.rack.description}</Text>
