@@ -120,11 +120,17 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
             }
             setTimeout(() => {
               if (orderId) {
-                navigation.navigate({
-                  name: 'OrderPicking',
-                  params: { orderId, scanSuccess: true },
-                  merge: true,
-                });
+                // Pop scanner off the stack. navigate(OrderPicking) can leave BarcodeScanner
+                // underneath, so Back would reopen the camera.
+                if (typeof navigation.canGoBack === 'function' && navigation.canGoBack()) {
+                  navigation.goBack();
+                } else {
+                  navigation.navigate({
+                    name: 'OrderPicking',
+                    params: { orderId, scanSuccess: true },
+                    merge: true,
+                  });
+                }
               } else if (navigation.canGoBack && navigation.canGoBack()) {
                 navigation.goBack();
               } else {

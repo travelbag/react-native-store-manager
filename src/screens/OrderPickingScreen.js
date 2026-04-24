@@ -17,6 +17,7 @@ import {
   DeviceEventEmitter,
   ScrollView,
   useWindowDimensions,
+  BackHandler,
 } from 'react-native';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { useOrders, ORDER_STATUS, ITEM_STATUS } from '../context/OrdersContext';
@@ -249,6 +250,27 @@ const OrderPicking = ({ route, navigation }) => {
       return () => clearTimeout(t);
     }, [focusCapture])
   );
+
+  // When every line is picked or unavailable, leave picking in one step (Accepted tab),
+  // and match Android hardware back to the same behavior.
+  useFocusEffect(
+    React.useCallback(() => {
+      if (!allPickedOrUnavailable) return undefined;
+      const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+        navigation.navigate('OrdersList', { selectedTab: ORDER_STATUS.ACCEPTED });
+        return true;
+      });
+      return () => sub.remove();
+    }, [allPickedOrUnavailable, navigation])
+  );
+
+  const handleLeavePicking = React.useCallback(() => {
+    if (allPickedOrUnavailable) {
+      navigation.navigate('OrdersList', { selectedTab: ORDER_STATUS.ACCEPTED });
+    } else {
+      navigation.goBack();
+    }
+  }, [allPickedOrUnavailable, navigation]);
 
   useEffect(() => {
     const currentOrderId = String(order?.id || order?.orderId || orderId || '').trim();
@@ -795,7 +817,7 @@ const OrderPicking = ({ route, navigation }) => {
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <TextInput {...hardwareInputProps} />
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
+        <TouchableOpacity onPress={handleLeavePicking}>
           <Ionicons name="arrow-back" size={24} color="#007AFF" />
         </TouchableOpacity>
         <View style={styles.headerInfo}>
