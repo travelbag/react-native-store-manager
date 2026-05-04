@@ -32,17 +32,17 @@ const readAssignDriverPayload = async (response) => {
 };
 
 export const assignDriver = async (orderId, storeId, packageRack) => {
-  // Backend POST /api/orders/assign-driver-fromstore reads `packageRack` and writes orders.rack_number.
+  // Backend POST /api/orders/assign-driver-batch-fromstore reads `packageRack` and writes orders.rack_number.
   const body = {
     orderId,
     storeId,
     status: ASSIGN_DRIVER_STATUS,
     packageRack: packageRack != null ? String(packageRack).trim() : '',
   };
-  console.log('[ui->api] POST /orders/assign-driver-fromstore', {
+  console.log('[ui->api] POST /orders/assign-driver-batch-fromstore', {
     body,
   });
-  const response = await apiClient.post('/orders/assign-driver-fromstore', {
+  const response = await apiClient.post('/orders/assign-driver-batch-fromstore', {
     body,
   });
   const result = await readAssignDriverPayload(response);
