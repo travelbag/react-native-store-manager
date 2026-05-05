@@ -13,18 +13,15 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useOrders, ORDER_STATUS, ITEM_STATUS } from '../context/OrdersContext';
-import { useAuth } from '../context/AuthContext';
 import { useNavigation } from '@react-navigation/native';
-import { assignDriver } from '../services/DriverService';
 
 const PACKAGE_RACK_OPTIONS_CARD = ['A', 'B', 'C', 'D'].flatMap((col) =>
   Array.from({ length: 15 }, (_, idx) => `${col}${idx + 1}`)
 );
 
 const OrderCard = ({ order, hideStatusBadge = false }) => {
-  const { updateOrderStatus, acceptOrder, rejectOrder, refreshOrders, mergeOrderPackageRack } = useOrders();
+  const { updateOrderStatus, acceptOrder, rejectOrder, refreshOrders, mergeOrderPackageRack, markOrderReady } = useOrders();
   const navigation = useNavigation();
-  const { manager } = useAuth();
   const [noDriverVisible, setNoDriverVisible] = React.useState(false);
   const [isAssigningDriver, setIsAssigningDriver] = React.useState(false);
   const [detailsModalVisible, setDetailsModalVisible] = React.useState(false);
@@ -112,6 +109,8 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
         return '#FF9500';
       case ORDER_STATUS.ACCEPTED:
         return '#007AFF';
+      case ORDER_STATUS.READY:
+        return '#F59E0B';
       case ORDER_STATUS.COMPLETED:
         return '#8E8E93';
       case ORDER_STATUS.REJECTED:
@@ -130,6 +129,8 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
         return 'Pending';
       case 'accepted':
         return 'Accepted';
+      case 'ready':
+        return 'Ready (waiting assignment)';
       case 'assigned':
         return 'Assigned';
       case 'completed':
@@ -162,34 +163,24 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
     navigation.navigate('OrderPicking', { orderId });
   };
 
-  const handleAssignDriver = async () => {
-   // console.log('Assigning driver for order:', orderId);
+  const handleMarkReady = async () => {
     if (isAssigningDriver) return;
     if (!hasAssignedRack) {
-      Alert.alert('Select package rack', 'Please select the package rack before assigning a driver.');
+      Alert.alert('Select package rack', 'Please select the package rack before marking the order ready.');
       return;
     }
-    const storeId = manager?.storeId || manager?.store_id || '';
     try {
       setIsAssigningDriver(true);
-      await assignDriver(orderId, storeId, packageRack);
-      updateOrderStatus(orderId, ORDER_STATUS.ASSIGNED);
-      // Pull fresh state from backend so the old accepted snapshot is replaced immediately.
+      await markOrderReady(orderId);
       if (typeof refreshOrders === 'function') {
         await refreshOrders(null, { force: true });
       }
-      Alert.alert('Success', 'Driver assigned successfully!', [
-        {
-          text: 'OK',
-          onPress: () => navigation.navigate('OrdersList', { selectedTab: ORDER_STATUS.ASSIGNED }),
-        },
-      ]);
+      navigation.navigate('OrdersList', {
+        selectedTab: ORDER_STATUS.ACCEPTED,
+        readyNotice: 'Order marked ready. Assigning driver…',
+      });
     } catch (error) {
-      const message = error?.message || 'Failed to assign driver';
-      if (String(message).toLowerCase().includes('no drivers available')) {
-        setNoDriverVisible(true);
-        return;
-      }
+      const message = error?.message || 'Failed to mark order ready';
       Alert.alert('Error', message);
     } finally {
       setIsAssigningDriver(false);
@@ -231,7 +222,8 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
 
   const statusNormalized = String(status || '').toLowerCase();
   /** Hide the long items list on Pending / Accepted so Accept & Start Picking stay visible on small scanners. */
-  const useCompactItems = statusNormalized === 'pending' || statusNormalized === 'accepted';
+  const useCompactItems =
+    statusNormalized === 'pending' || statusNormalized === 'accepted' || statusNormalized === 'ready';
 
   const allItemsFinalized = React.useMemo(() => {
     if (!items.length) return false;
@@ -397,6 +389,26 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
     ));
 
   const renderAcceptedActions = () => {
+    if (statusNormalized === ORDER_STATUS.READY) {
+      return (
+        <View style={styles.cardFinalizeRow}>
+          <TouchableOpacity
+            style={styles.cardRackHalf}
+            onPress={() => setRackModalVisible(true)}
+            activeOpacity={0.75}
+          >
+            <Text style={styles.cardRackLabel}>Package rack</Text>
+            <Text style={styles.cardRackValue} numberOfLines={1}>
+              {packageRack || 'Select…'}
+            </Text>
+          </TouchableOpacity>
+          <View style={[styles.cardAssignHalf, styles.cardAssignHalfDisabled]}>
+            <Ionicons name="time-outline" size={18} color="#FFFFFF" />
+            <Text style={styles.cardAssignHalfText}>Waiting assignment</Text>
+          </View>
+        </View>
+      );
+    }
     if (!allItemsFinalized) {
       return (
         <TouchableOpacity style={styles.primaryButton} onPress={handleStartPicking}>
@@ -420,14 +432,14 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
         <TouchableOpacity
           style={[
             styles.cardAssignHalf,
-            (!hasAssignedRack || isAssigningDriver) && styles.cardAssignHalfDisabled,
+            isAssigningDriver && styles.cardAssignHalfDisabled,
           ]}
-          disabled={!hasAssignedRack || isAssigningDriver}
-          onPress={handleAssignDriver}
+          disabled={isAssigningDriver}
+          onPress={handleMarkReady}
         >
-          <Ionicons name="car-outline" size={18} color="#FFFFFF" />
+          <Ionicons name="checkmark-done-outline" size={18} color="#FFFFFF" />
           <Text style={styles.cardAssignHalfText}>
-            {isAssigningDriver ? 'Assigning…' : 'Assign'}
+            {isAssigningDriver ? 'Saving…' : 'Mark Ready'}
           </Text>
         </TouchableOpacity>
       </View>
@@ -435,7 +447,7 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
   };
 
   const renderActionButtons = () => {
-    if (statusNormalized === 'accepted') {
+    if (statusNormalized === 'accepted' || statusNormalized === ORDER_STATUS.READY) {
       return renderAcceptedActions();
     }
     switch (statusNormalized) {
@@ -454,7 +466,7 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
   };
 
   const renderOrderDetailsBody = () => {
-    if (statusNormalized === 'accepted') {
+    if (statusNormalized === 'accepted' || statusNormalized === ORDER_STATUS.READY) {
       return (
         <>
           <Text style={styles.detailsSectionTitle}>Items ({items.length})</Text>

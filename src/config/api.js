@@ -2,7 +2,7 @@
 const DEFAULT_PRODUCTION_BASE_URL = 'https://ubgukf7hdu.us-east-1.awsapprunner.com/api';
 
 /** LAN backend (Mac IP + API port). Change port if your server uses something other than 8080. */
-const LOCAL_API_BASE_URL = 'http://192.168.1.253:8080/api';
+const LOCAL_API_BASE_URL = 'http://192.168.1.199:8080/api';
 
 /**
  * Set `false` to hit production (`DEFAULT_PRODUCTION_BASE_URL`).

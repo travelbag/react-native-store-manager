@@ -22,6 +22,7 @@ const OrdersScreen = ({ route, navigation }) => {
   const [selectedFilter, setSelectedFilter] = useState(ORDER_STATUS.PENDING);
   const [refreshing, setRefreshing] = useState(false);
   const [alertedCancelledOrders, setAlertedCancelledOrders] = useState(new Set()); // Track alerted order IDs to prevent duplicates
+  const [inlineNotice, setInlineNotice] = useState('');
   const insets = useSafeAreaInsets();
 
   // Handle navigation parameter to set the selected tab
@@ -33,6 +34,25 @@ const OrdersScreen = ({ route, navigation }) => {
     }
   }, [route?.params?.selectedTab]);
 
+  React.useEffect(() => {
+    if (!route?.params?.readyNotice) {
+      return undefined;
+    }
+    setInlineNotice(route.params.readyNotice);
+    route.params.readyNotice = undefined;
+    refreshOrders(null, { force: true });
+    const refreshTimer = setTimeout(() => {
+      refreshOrders(null, { force: true });
+    }, 2000);
+    const noticeTimer = setTimeout(() => {
+      setInlineNotice('');
+    }, 3000);
+    return () => {
+      clearTimeout(refreshTimer);
+      clearTimeout(noticeTimer);
+    };
+  }, [route?.params?.readyNotice, refreshOrders]);
+
   // Detect newly cancelled orders and show alert (only once per order, for current orders not yet assigned/delivered)
   useEffect(() => {
     const currentOrders = Array.isArray(orders) ? orders : [];
@@ -40,7 +60,7 @@ const OrdersScreen = ({ route, navigation }) => {
       const orderId = order?.id || order?.orderId;
       const currentStatus = String(order?.status || order?.orderStatus || '').toLowerCase();
       // Only alert for cancelled orders that are "current" (not yet assigned or delivered)
-      const isCurrentOrder = ['pending', 'accepted'].includes(currentStatus); // Adjust if needed based on your workflow
+      const isCurrentOrder = ['pending', 'accepted', 'ready'].includes(currentStatus); // Adjust if needed based on your workflow
       return currentStatus === 'cancelled' && isCurrentOrder && !alertedCancelledOrders.has(orderId);
     });
 
@@ -66,7 +86,7 @@ const OrdersScreen = ({ route, navigation }) => {
 
   const isAcceptedTabStatus = (o) => {
     const s = normalizeStatus(o.status ?? o.orderStatus);
-    return s === 'accepted';
+    return s === 'accepted' || s === ORDER_STATUS.READY;
   };
 
   const filters = [
@@ -97,12 +117,12 @@ const OrdersScreen = ({ route, navigation }) => {
     },
   ];
 
-  // Accepted tab includes only accepted orders.
+  // Accepted tab includes accepted orders and ready orders waiting for assignment.
   const filteredOrders = safeOrders.filter(order => {
     const orderStatus = normalizeStatus(order.status ?? order.orderStatus);
     const filter = normalizeStatus(selectedFilter);
     if (filter === normalizeStatus(ORDER_STATUS.ACCEPTED)) {
-      return orderStatus === 'accepted';
+      return orderStatus === 'accepted' || orderStatus === ORDER_STATUS.READY;
     }
     return orderStatus === filter;
   });
@@ -244,6 +264,13 @@ const OrdersScreen = ({ route, navigation }) => {
         />
       </View>
 
+      {inlineNotice && filteredOrders.length > 0 ? (
+        <View style={styles.noticeBanner}>
+          <Ionicons name="information-circle" size={18} color="#0F5132" />
+          <Text style={styles.noticeBannerText}>{inlineNotice}</Text>
+        </View>
+      ) : null}
+
       <FlatList
         key={selectedFilter}
         data={filteredOrders}
@@ -335,6 +362,24 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#E5E5E5',
+  },
+  noticeBanner: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: '#E8F7EE',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  noticeBannerText: {
+    flex: 1,
+    color: '#0F5132',
+    fontSize: 14,
+    fontWeight: '600',
   },
   filtersContent: {
     paddingHorizontal: 16,

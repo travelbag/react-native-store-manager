@@ -79,10 +79,13 @@ const StatsScreen = () => {
     totalOrders: orders.length,
     todayOrders: todayOrders.length,
     pendingOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.PENDING).length,
-    acceptedOrders: orders.filter((o) => statusOf(o) === ORDER_STATUS.ACCEPTED).length,
+    acceptedOrders: orders.filter((o) => {
+      const status = statusOf(o);
+      return status === ORDER_STATUS.ACCEPTED || status === ORDER_STATUS.READY;
+    }).length,
     pickingOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.PICKING).length,
     preparingOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.PREPARING).length,
-    readyOrders: 0,
+    readyOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.READY).length,
     completedOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.COMPLETED).length,
     rejectedOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.REJECTED).length,
     totalRevenue: orders

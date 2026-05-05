@@ -9,7 +9,7 @@ import {
 } from '../services/PendingOrderAlertSound';
 import { API_CONFIG, buildApiUrl } from '../config/api';
 import { apiClient } from '../services/apiClient';
-import { assignDriver } from '../services/DriverService';
+import { assignDriver, wasOrderAssigned } from '../services/DriverService';
 import { useAuth } from './AuthContext';
 
 const OrdersContext = createContext();
@@ -18,6 +18,7 @@ const OrdersContext = createContext();
 export const ORDER_STATUS = {
   PENDING: 'pending' || 'confirmed',
   ACCEPTED: 'accepted',
+  READY: 'ready',
   ASSIGNED: 'assigned',
   COMPLETED: 'delivered',
   REJECTED: 'rejected',
@@ -1218,6 +1219,43 @@ export function OrdersProvider({ children }) {
     }
   };
 
+  const markOrderReady = async (orderId) => {
+    if (!orderId) {
+      throw new Error('Order ID is required');
+    }
+    const storeId = manager?.storeId || manager?.store_id;
+    if (!storeId) {
+      throw new Error('Store ID is required');
+    }
+    const endpoint = `/orders/${orderId}/status`;
+    const payload = {
+      status: ORDER_STATUS.READY,
+      storeId,
+    };
+    const response = await apiClient.put(endpoint, {
+      body: payload,
+    });
+    let responseData = null;
+    try {
+      responseData = await response.json();
+    } catch (_) {
+      responseData = null;
+    }
+    if (!response.ok) {
+      throw new Error(
+        responseData?.message || responseData?.error || 'Failed to mark order ready'
+      );
+    }
+    updateOrderStatus(orderId, ORDER_STATUS.READY);
+    try {
+      const orders = await fetchOrdersFromDB();
+      applyOrdersSnapshot(orders);
+    } catch (fetchError) {
+      console.warn('⚠️ Failed to refresh orders after mark ready:', fetchError);
+    }
+    return responseData;
+  };
+
   const rejectOrder = async (orderId) => {
     console.log('❌ Rejecting order ID:', orderId);
     try {
@@ -1313,7 +1351,7 @@ export function OrdersProvider({ children }) {
    * Single step after picking: assign driver directly.
    * Backend no longer requires a separate `ready` transition before assignment.
    */
-  const completePickingAndAssignDriver = async (orderId, packageRack) => {
+  const completePickingAndAssignDriver = async (orderId, packageRack, options = {}) => {
     if (!orderId) {
       console.error('❌ completePickingAndAssignDriver: missing orderId');
       throw new Error('Order ID is required');
@@ -1330,10 +1368,11 @@ export function OrdersProvider({ children }) {
 
     let assignResult;
     try {
-      assignResult = await assignDriver(orderId, storeId, packageRack);
+      assignResult = await assignDriver(orderId, storeId, packageRack, options);
     } catch (e) {
       throw e;
     }
+    const currentOrderAssigned = wasOrderAssigned(assignResult, orderId);
 
     if (assignResult?.alreadyAssigned) {
       console.log('ℹ️ Order was already assigned; syncing UI as assigned:', {
@@ -1346,31 +1385,33 @@ export function OrdersProvider({ children }) {
           null,
       });
     }
-    console.log('[ui-state] setting local order status after assign', {
-      orderId,
-      status: ORDER_STATUS.ASSIGNED,
-      packageRack,
-      assignResult,
-    });
-    const existingOrder = ordersRef.current.find(
-      (order) => extractOrderIdValue(order) === normalizeValue(orderId)
-    );
-    const updatedOrderFromApi = assignResult?.order ? normalizeOrder(assignResult.order) : null;
-    if (updatedOrderFromApi) {
-      dispatch({ type: ACTIONS.ADD_ORDER, payload: updatedOrderFromApi });
-    } else if (existingOrder) {
-      dispatch({
-        type: ACTIONS.ADD_ORDER,
-        payload: {
-          ...existingOrder,
-          status: ORDER_STATUS.ASSIGNED,
-          orderStatus: ORDER_STATUS.ASSIGNED,
-          backendStatus: ORDER_STATUS.ASSIGNED,
-          packageRack,
-        },
+    if (currentOrderAssigned) {
+      console.log('[ui-state] setting local order status after assign', {
+        orderId,
+        status: ORDER_STATUS.ASSIGNED,
+        packageRack,
+        assignResult,
       });
-    } else {
-      updateOrderStatus(orderId, ORDER_STATUS.ASSIGNED);
+      const existingOrder = ordersRef.current.find(
+        (order) => extractOrderIdValue(order) === normalizeValue(orderId)
+      );
+      const updatedOrderFromApi = assignResult?.order ? normalizeOrder(assignResult.order) : null;
+      if (updatedOrderFromApi) {
+        dispatch({ type: ACTIONS.ADD_ORDER, payload: updatedOrderFromApi });
+      } else if (existingOrder) {
+        dispatch({
+          type: ACTIONS.ADD_ORDER,
+          payload: {
+            ...existingOrder,
+            status: ORDER_STATUS.ASSIGNED,
+            orderStatus: ORDER_STATUS.ASSIGNED,
+            backendStatus: ORDER_STATUS.ASSIGNED,
+            packageRack,
+          },
+        });
+      } else {
+        updateOrderStatus(orderId, ORDER_STATUS.ASSIGNED);
+      }
     }
     try {
       const orders = await fetchOrdersFromDB();
@@ -1378,6 +1419,7 @@ export function OrdersProvider({ children }) {
     } catch (fetchError) {
       console.warn('⚠️ Failed to refresh orders after assign:', fetchError);
     }
+    return assignResult;
   };
 
   /** Persist selected package rack on the in-memory order (e.g. after picking, before assign driver). */
@@ -1425,6 +1467,7 @@ export function OrdersProvider({ children }) {
     markItemUnavailable,
   persistItemScan,
     completePickingAndAssignDriver,
+    markOrderReady,
     mergeOrderPackageRack,
     completeOrder,
     removeOrder,

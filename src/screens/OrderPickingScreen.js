@@ -44,7 +44,7 @@ const OrderPicking = ({ route, navigation }) => {
     updateItemStatus,
     markItemUnavailable,
     persistItemScan,
-    completePickingAndAssignDriver,
+    markOrderReady,
     mergeOrderPackageRack,
   } = useOrders();
   
@@ -519,10 +519,34 @@ const OrderPicking = ({ route, navigation }) => {
   }
 
   const orderStatusNorm = normalizeStatus(order.status ?? order.orderStatus);
-  const canAssignDriver =
+  const canMarkReady =
     allPickedOrUnavailable &&
-    !['assigned', 'delivered', 'completed', 'cancelled'].includes(orderStatusNorm) &&
+    !['ready', 'assigned', 'delivered', 'completed', 'cancelled'].includes(orderStatusNorm) &&
     orderStatusNorm === 'accepted';
+
+  const handleMarkReady = async () => {
+    try {
+      const targetOrderId = order.id || order.orderId || orderId;
+      if (!selectedPackageRack) {
+        Alert.alert(
+          'Select package rack',
+          'Please select the package rack before assigning a driver.'
+        );
+        return;
+      }
+      setIsAssigningDriver(true);
+      await markOrderReady(targetOrderId);
+      navigation.navigate('OrdersList', {
+        selectedTab: ORDER_STATUS.ACCEPTED,
+        readyNotice: 'Order marked ready. Assigning driver…',
+      });
+    } catch (error) {
+      const msg = error?.message || 'Failed to mark order ready. Please try again.';
+      Alert.alert('Error', msg, [{ text: 'OK' }]);
+    } finally {
+      setIsAssigningDriver(false);
+    }
+  };
 
   const getItemStatusColor = (status) => {
     switch (status) {
@@ -1063,12 +1087,12 @@ const OrderPicking = ({ route, navigation }) => {
         ListFooterComponent={<View style={styles.listFooterSpacer} />}
       />
 
-      {canAssignDriver ? (
+      {canMarkReady ? (
         <View style={styles.bottomAssignBar}>
           <View style={styles.readyRowTop}>
             <Ionicons name="checkmark-circle" size={18} color="#34C759" />
             <Text style={styles.readyMessageOneLine} numberOfLines={2}>
-              All items processed — pick rack, then assign driver.
+              All items processed — pick rack, then mark order ready.
             </Text>
           </View>
           <View style={styles.readyActionsRow}>
@@ -1085,50 +1109,16 @@ const OrderPicking = ({ route, navigation }) => {
             <TouchableOpacity
               style={[
                 styles.assignHalf,
-                (!selectedPackageRack || isAssigningDriver) && styles.assignHalfDisabled,
+                isAssigningDriver && styles.assignHalfDisabled,
               ]}
-              disabled={!selectedPackageRack || isAssigningDriver}
-              onPress={async () => {
-                try {
-                  const targetOrderId = order.id || order.orderId || orderId;
-                  if (!selectedPackageRack) {
-                    Alert.alert(
-                      'Select package rack',
-                      'Please select the package rack before assigning a driver.'
-                    );
-                    return;
-                  }
-                  setIsAssigningDriver(true);
-                  await completePickingAndAssignDriver(targetOrderId, selectedPackageRack);
-                  Alert.alert(
-                    'Driver assigned ✅',
-                    `This order is assigned to a driver and stored at rack ${selectedPackageRack}.`,
-                    [
-                      {
-                        text: 'OK',
-                        onPress: () => {
-                          navigation.navigate('OrdersList', {
-                            selectedTab: ORDER_STATUS.ASSIGNED,
-                          });
-                        },
-                      },
-                    ]
-                  );
-                } catch (error) {
-                  const msg = error?.message || 'Failed to assign driver. Please try again.';
-                  if (String(msg).toLowerCase().includes('no drivers')) {
-                    Alert.alert('No drivers available', 'Try again in a few minutes.', [{ text: 'OK' }]);
-                  } else {
-                    Alert.alert('Error', msg, [{ text: 'OK' }]);
-                  }
-                } finally {
-                  setIsAssigningDriver(false);
-                }
+              disabled={isAssigningDriver}
+              onPress={() => {
+                void handleMarkReady();
               }}
             >
-              <Ionicons name="car-outline" size={18} color="#FFFFFF" />
+              <Ionicons name="checkmark-done-outline" size={18} color="#FFFFFF" />
               <Text style={styles.assignHalfText}>
-                {isAssigningDriver ? 'Assigning…' : 'Assign'}
+                {isAssigningDriver ? 'Saving…' : 'Mark Ready'}
               </Text>
             </TouchableOpacity>
           </View>
