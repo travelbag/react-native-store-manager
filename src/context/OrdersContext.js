@@ -566,7 +566,12 @@ export function OrdersProvider({ children }) {
       driverId,
       driverName: orderRaw.driverName ?? orderRaw.driver_name ?? orderRaw.driver?.name ?? '',
       driverPhone: orderRaw.driverPhone ?? orderRaw.driver_phone ?? orderRaw.driver?.phone ?? orderRaw.driver_mobile ?? '',
-      packageRack: orderRaw.rackNumber ?? '',
+      packageRack:
+        orderRaw.packageRack ??
+        orderRaw.rackNumber ??
+        orderRaw.rack_number ??
+        orderRaw.pickup_rack ??
+        '',
       acceptedByManagerId: orderRaw.acceptedByManagerId ?? orderRaw.accepted_by_manager_id ?? null,
       acceptedByManagerName: orderRaw.acceptedByManagerName ?? orderRaw.accepted_by_manager_name ?? null,
       acceptedAt: orderRaw.acceptedAt ?? orderRaw.accepted_at ?? null,
@@ -651,7 +656,35 @@ export function OrdersProvider({ children }) {
       if (status) endpoint += `?status=${status}`;
       try {
         const response = await apiClient.get(endpoint);
-        const data = await response.json();
+        const rawText = await response.text();
+        if (!response.ok) {
+          console.error('❌ Failed to fetch orders from DB:', {
+            endpoint,
+            status: response.status,
+            body: rawText?.slice(0, 300) || '',
+          });
+          return [];
+        }
+        if (!rawText || !rawText.trim()) {
+          console.warn('⚠️ Orders API returned empty response body', {
+            endpoint,
+            status: response.status,
+            source,
+          });
+          return [];
+        }
+        let data;
+        try {
+          data = JSON.parse(rawText);
+        } catch (parseError) {
+          console.error('❌ Orders API returned invalid JSON:', {
+            endpoint,
+            status: response.status,
+            body: rawText.slice(0, 300),
+            parseError: parseError?.message || parseError,
+          });
+          return [];
+        }
 
         const rawOrders = data.orders || data || [];
         const normalized = Array.isArray(rawOrders)
