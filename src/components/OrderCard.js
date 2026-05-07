@@ -50,7 +50,7 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
   const driverName = order?.driverName || '';
   const driverPhone = order?.driverPhone || '';
   const orderRackFromServer = String(
-    order?.packageRack || order?.rackNumber || order?.rack_number || ''
+    order?.packageRack || order?.rackNumber || order?.rack_number || order?.pickup_rack || ''
   ).trim();
   const [rackPickOptimistic, setRackPickOptimistic] = React.useState(null);
 
@@ -59,9 +59,7 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
     if (!orderRackFromServer) return;
     if (orderRackFromServer === rackPickOptimistic) {
       setRackPickOptimistic(null);
-      return;
     }
-    setRackPickOptimistic(null);
   }, [orderRackFromServer, rackPickOptimistic]);
 
   const packageRack = String(rackPickOptimistic || orderRackFromServer || '').trim();
@@ -171,7 +169,7 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
     }
     try {
       setIsAssigningDriver(true);
-      await markOrderReady(orderId);
+      await markOrderReady(orderId, packageRack);
       if (typeof refreshOrders === 'function') {
         await refreshOrders(null, { force: true });
       }

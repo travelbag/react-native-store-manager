@@ -184,10 +184,34 @@ function ordersReducer(state, action) {
       // Remove duplicate orders by orderId (backend key) — coerce to string for reliable comparison
       const uniqueOrders = [];
       const seenOrderIds = new Set();
+      const existingOrdersById = new Map(
+        state.orders.map((order) => [String(order.orderId ?? order.id ?? ''), order])
+      );
       for (const order of action.payload) {
         const key = String(order.orderId ?? order.id ?? '');
         if (!seenOrderIds.has(key)) {
-          uniqueOrders.push(order);
+          const existingOrder = existingOrdersById.get(key);
+          const incomingRack = String(
+            order?.packageRack ?? order?.rackNumber ?? order?.rack_number ?? order?.pickup_rack ?? ''
+          ).trim();
+          const existingRack = String(
+            existingOrder?.packageRack ??
+              existingOrder?.rackNumber ??
+              existingOrder?.rack_number ??
+              existingOrder?.pickup_rack ??
+              ''
+          ).trim();
+          uniqueOrders.push(
+            !incomingRack && existingRack
+              ? {
+                  ...order,
+                  packageRack: existingRack,
+                  rackNumber: existingRack,
+                  rack_number: existingRack,
+                  pickup_rack: existingRack,
+                }
+              : order
+          );
           seenOrderIds.add(key);
         }
       }
@@ -1252,7 +1276,7 @@ export function OrdersProvider({ children }) {
     }
   };
 
-  const markOrderReady = async (orderId) => {
+  const markOrderReady = async (orderId, packageRack = '') => {
     if (!orderId) {
       throw new Error('Order ID is required');
     }
@@ -1260,11 +1284,23 @@ export function OrdersProvider({ children }) {
     if (!storeId) {
       throw new Error('Store ID is required');
     }
+    const rackValue = String(packageRack || '').trim();
     const endpoint = `/orders/${orderId}/status`;
     const payload = {
       status: ORDER_STATUS.READY,
       storeId,
+      ...(rackValue
+        ? {
+            rackNumber: rackValue,
+            packageRack: rackValue,
+          }
+        : {}),
     };
+    console.log('[ui->api] PUT /orders/:orderId/status', {
+      orderId,
+      endpoint,
+      payload,
+    });
     const response = await apiClient.put(endpoint, {
       body: payload,
     });
@@ -1279,7 +1315,35 @@ export function OrdersProvider({ children }) {
         responseData?.message || responseData?.error || 'Failed to mark order ready'
       );
     }
-    updateOrderStatus(orderId, ORDER_STATUS.READY);
+    const updatedOrderFromApi = responseData?.order ? normalizeOrder(responseData.order) : null;
+    if (updatedOrderFromApi) {
+      dispatch({ type: ACTIONS.ADD_ORDER, payload: updatedOrderFromApi });
+    } else {
+      const existingOrder = ordersRef.current.find(
+        (order) => extractOrderIdValue(order) === normalizeValue(orderId)
+      );
+      if (existingOrder) {
+        dispatch({
+          type: ACTIONS.ADD_ORDER,
+          payload: {
+            ...existingOrder,
+            status: ORDER_STATUS.READY,
+            orderStatus: ORDER_STATUS.READY,
+            backendStatus: ORDER_STATUS.READY,
+            ...(rackValue
+              ? {
+                  packageRack: rackValue,
+                  rackNumber: rackValue,
+                  rack_number: rackValue,
+                  pickup_rack: rackValue,
+                }
+              : {}),
+          },
+        });
+      } else {
+        updateOrderStatus(orderId, ORDER_STATUS.READY);
+      }
+    }
     try {
       const orders = await fetchOrdersFromDB();
       applyOrdersSnapshot(orders);
@@ -1474,6 +1538,8 @@ export function OrdersProvider({ children }) {
         ...existingOrder,
         packageRack: rackValue,
         rackNumber: rackValue,
+        rack_number: rackValue,
+        pickup_rack: rackValue,
       },
     });
   }, [dispatch]);

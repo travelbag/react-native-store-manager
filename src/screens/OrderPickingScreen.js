@@ -74,11 +74,13 @@ const OrderPicking = ({ route, navigation }) => {
   }, [orders, orderId]);
 
   useEffect(() => {
-    const rackFromOrder = String(order?.packageRack || order?.rackNumber || '').trim();
+    const rackFromOrder = String(
+      order?.packageRack || order?.rackNumber || order?.rack_number || order?.pickup_rack || ''
+    ).trim();
     if (rackFromOrder) {
       setSelectedPackageRack(rackFromOrder);
     }
-  }, [order?.packageRack, order?.rackNumber]);
+  }, [order?.packageRack, order?.rackNumber, order?.rack_number, order?.pickup_rack]);
 
   useEffect(() => {
     if (!allPickedOrUnavailable) {
@@ -88,12 +90,12 @@ const OrderPicking = ({ route, navigation }) => {
     if (autoRackPromptRef.current) return;
     autoRackPromptRef.current = true;
     const rackNow = String(
-      selectedPackageRack || order?.packageRack || order?.rackNumber || ''
+      selectedPackageRack || order?.packageRack || order?.rackNumber || order?.rack_number || order?.pickup_rack || ''
     ).trim();
     if (!rackNow) {
       setIsRackPickerVisible(true);
     }
-  }, [allPickedOrUnavailable, selectedPackageRack, order?.packageRack, order?.rackNumber]);
+  }, [allPickedOrUnavailable, selectedPackageRack, order?.packageRack, order?.rackNumber, order?.rack_number, order?.pickup_rack]);
 
   // Check for cancellation on screen focus and stop picking if cancelled
   useFocusEffect(
@@ -535,7 +537,7 @@ const OrderPicking = ({ route, navigation }) => {
         return;
       }
       setIsAssigningDriver(true);
-      await markOrderReady(targetOrderId);
+      await markOrderReady(targetOrderId, selectedPackageRack);
       navigation.navigate('OrdersList', {
         selectedTab: ORDER_STATUS.ACCEPTED,
         readyNotice: 'Order marked ready. Assigning driver…',
