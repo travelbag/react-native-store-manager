@@ -28,10 +28,6 @@ import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { useHardwareBarcodeWedge } from '../hooks/useHardwareBarcodeWedge';
 
-const PACKAGE_RACK_OPTIONS = ['A', 'B', 'C', 'D'].flatMap((col) =>
-  Array.from({ length: 15 }, (_, idx) => `${col}${idx + 1}`)
-);
-
 const sameOrderId = (o, routeOrderId) =>
   String(o?.id ?? o?.orderId ?? '').trim() === String(routeOrderId ?? '').trim();
 
@@ -45,14 +41,11 @@ const OrderPicking = ({ route, navigation }) => {
     markItemUnavailable,
     persistItemScan,
     markOrderReady,
-    mergeOrderPackageRack,
   } = useOrders();
   
   const [order, setOrder] = useState(null);
   const [allPickedOrUnavailable, setAllPickedOrUnavailable] = useState(false);
   const [isAssigningDriver, setIsAssigningDriver] = useState(false);
-  const [selectedPackageRack, setSelectedPackageRack] = useState('');
-  const [isRackPickerVisible, setIsRackPickerVisible] = useState(false);
   const [previewItem, setPreviewItem] = useState(null);
   const [isPreviewVisible, setIsPreviewVisible] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
@@ -72,30 +65,6 @@ const OrderPicking = ({ route, navigation }) => {
     const currentOrder = orders.find((o) => sameOrderId(o, orderId));
     setOrder(currentOrder);
   }, [orders, orderId]);
-
-  useEffect(() => {
-    const rackFromOrder = String(
-      order?.packageRack || order?.rackNumber || order?.rack_number || order?.pickup_rack || ''
-    ).trim();
-    if (rackFromOrder) {
-      setSelectedPackageRack(rackFromOrder);
-    }
-  }, [order?.packageRack, order?.rackNumber, order?.rack_number, order?.pickup_rack]);
-
-  useEffect(() => {
-    if (!allPickedOrUnavailable) {
-      autoRackPromptRef.current = false;
-      return;
-    }
-    if (autoRackPromptRef.current) return;
-    autoRackPromptRef.current = true;
-    const rackNow = String(
-      selectedPackageRack || order?.packageRack || order?.rackNumber || order?.rack_number || order?.pickup_rack || ''
-    ).trim();
-    if (!rackNow) {
-      setIsRackPickerVisible(true);
-    }
-  }, [allPickedOrUnavailable, selectedPackageRack, order?.packageRack, order?.rackNumber, order?.rack_number, order?.pickup_rack]);
 
   // Check for cancellation on screen focus and stop picking if cancelled
   useFocusEffect(
@@ -529,18 +498,16 @@ const OrderPicking = ({ route, navigation }) => {
   const handleMarkReady = async () => {
     try {
       const targetOrderId = order.id || order.orderId || orderId;
-      if (!selectedPackageRack) {
-        Alert.alert(
-          'Select package rack',
-          'Please select the package rack before assigning a driver.'
-        );
-        return;
-      }
       setIsAssigningDriver(true);
-      await markOrderReady(targetOrderId, selectedPackageRack);
+      const result = await markOrderReady(targetOrderId);
+      const resolvedRack = String(
+        result?.packageRack || result?.rackNumber || result?.rack_number || result?.seedOrderRack || ''
+      ).trim();
       navigation.navigate('OrdersList', {
         selectedTab: ORDER_STATUS.ACCEPTED,
-        readyNotice: 'Order marked ready. Assigning driver…',
+        readyNotice: resolvedRack
+          ? `Order marked ready. Keep package in rack ${resolvedRack}.`
+          : 'Order marked ready. Rack pending.',
       });
     } catch (error) {
       const msg = error?.message || 'Failed to mark order ready. Please try again.';
@@ -956,56 +923,6 @@ const OrderPicking = ({ route, navigation }) => {
       </Modal>
 
       <Modal
-        animationType="fade"
-        transparent
-        visible={isRackPickerVisible}
-        onRequestClose={() => setIsRackPickerVisible(false)}
-      >
-        <Pressable style={styles.previewBackdrop} onPress={() => setIsRackPickerVisible(false)}>
-          <Pressable style={styles.rackPickerCard} onPress={() => {}}>
-            <Text style={styles.rackPickerTitle}>Select package rack</Text>
-            <Text style={styles.rackPickerSubtitle}>
-              Choose where the packed order is stored before assigning the driver.
-            </Text>
-            <ScrollView
-              style={[styles.rackGridScroll, { maxHeight: Math.min(420, windowHeight * 0.5) }]}
-              contentContainerStyle={styles.rackGrid}
-              showsVerticalScrollIndicator
-              keyboardShouldPersistTaps="handled"
-              nestedScrollEnabled
-            >
-              {PACKAGE_RACK_OPTIONS.map((rack) => (
-                <TouchableOpacity
-                  key={rack}
-                  style={[
-                    styles.rackOption,
-                    selectedPackageRack === rack && styles.rackOptionSelected,
-                  ]}
-                  onPress={() => {
-                    setSelectedPackageRack(rack);
-                    setIsRackPickerVisible(false);
-                    const targetOrderId = order?.id || order?.orderId || orderId;
-                    if (targetOrderId) {
-                      mergeOrderPackageRack(targetOrderId, rack);
-                    }
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.rackOptionText,
-                      selectedPackageRack === rack && styles.rackOptionTextSelected,
-                    ]}
-                  >
-                    {rack}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      <Modal
         transparent
         visible={pickingDetailItem != null}
         animationType="fade"
@@ -1094,20 +1011,10 @@ const OrderPicking = ({ route, navigation }) => {
           <View style={styles.readyRowTop}>
             <Ionicons name="checkmark-circle" size={18} color="#34C759" />
             <Text style={styles.readyMessageOneLine} numberOfLines={2}>
-              All items processed — pick rack, then mark order ready.
+              All items processed — mark order ready.
             </Text>
           </View>
           <View style={styles.readyActionsRow}>
-            <TouchableOpacity
-              style={styles.rackHalf}
-              onPress={() => setIsRackPickerVisible(true)}
-              activeOpacity={0.75}
-            >
-              <Text style={styles.rackHalfLabel}>Package rack</Text>
-              <Text style={styles.rackHalfValue} numberOfLines={1}>
-                {selectedPackageRack || 'Select…'}
-              </Text>
-            </TouchableOpacity>
             <TouchableOpacity
               style={[
                 styles.assignHalf,

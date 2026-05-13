@@ -1276,25 +1276,13 @@ export function OrdersProvider({ children }) {
     }
   };
 
-  const markOrderReady = async (orderId, packageRack = '') => {
+  const markOrderReady = async (orderId) => {
     if (!orderId) {
       throw new Error('Order ID is required');
     }
-    const storeId = manager?.storeId || manager?.store_id;
-    if (!storeId) {
-      throw new Error('Store ID is required');
-    }
-    const rackValue = String(packageRack || '').trim();
     const endpoint = `/orders/${orderId}/status`;
     const payload = {
       status: ORDER_STATUS.READY,
-      storeId,
-      ...(rackValue
-        ? {
-            rackNumber: rackValue,
-            packageRack: rackValue,
-          }
-        : {}),
     };
     console.log('[ui->api] PUT /orders/:orderId/status', {
       orderId,
@@ -1315,13 +1303,25 @@ export function OrdersProvider({ children }) {
         responseData?.message || responseData?.error || 'Failed to mark order ready'
       );
     }
-    const updatedOrderFromApi = responseData?.order ? normalizeOrder(responseData.order) : null;
+    const existingOrder = ordersRef.current.find(
+      (order) => extractOrderIdValue(order) === normalizeValue(orderId)
+    );
+    const normalizedTopLevelReadyResponse = responseData
+      ? normalizeOrder({
+          ...(existingOrder || {}),
+          ...(responseData?.order || {}),
+          ...responseData,
+          orderId: responseData?.orderId ?? responseData?.order?.orderId ?? orderId,
+          id: responseData?.orderId ?? responseData?.order?.orderId ?? orderId,
+          status: responseData?.status ?? responseData?.order?.status ?? ORDER_STATUS.READY,
+          orderStatus:
+            responseData?.status ?? responseData?.order?.orderStatus ?? responseData?.order?.status ?? ORDER_STATUS.READY,
+        })
+      : null;
+    const updatedOrderFromApi = responseData?.order ? normalizeOrder(responseData.order) : normalizedTopLevelReadyResponse;
     if (updatedOrderFromApi) {
       dispatch({ type: ACTIONS.ADD_ORDER, payload: updatedOrderFromApi });
     } else {
-      const existingOrder = ordersRef.current.find(
-        (order) => extractOrderIdValue(order) === normalizeValue(orderId)
-      );
       if (existingOrder) {
         dispatch({
           type: ACTIONS.ADD_ORDER,
@@ -1330,14 +1330,6 @@ export function OrdersProvider({ children }) {
             status: ORDER_STATUS.READY,
             orderStatus: ORDER_STATUS.READY,
             backendStatus: ORDER_STATUS.READY,
-            ...(rackValue
-              ? {
-                  packageRack: rackValue,
-                  rackNumber: rackValue,
-                  rack_number: rackValue,
-                  pickup_rack: rackValue,
-                }
-              : {}),
           },
         });
       } else {

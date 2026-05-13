@@ -15,17 +15,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { useOrders, ORDER_STATUS, ITEM_STATUS } from '../context/OrdersContext';
 import { useNavigation } from '@react-navigation/native';
 
-const PACKAGE_RACK_OPTIONS_CARD = ['A', 'B', 'C', 'D'].flatMap((col) =>
-  Array.from({ length: 15 }, (_, idx) => `${col}${idx + 1}`)
-);
-
 const OrderCard = ({ order, hideStatusBadge = false }) => {
-  const { updateOrderStatus, acceptOrder, rejectOrder, refreshOrders, mergeOrderPackageRack, markOrderReady } = useOrders();
+  const { updateOrderStatus, acceptOrder, rejectOrder, refreshOrders, markOrderReady } = useOrders();
   const navigation = useNavigation();
   const [noDriverVisible, setNoDriverVisible] = React.useState(false);
   const [isAssigningDriver, setIsAssigningDriver] = React.useState(false);
   const [detailsModalVisible, setDetailsModalVisible] = React.useState(false);
-  const [rackModalVisible, setRackModalVisible] = React.useState(false);
 
   // Map backend fields to frontend expected fields
   const orderId = order?.id || order?.orderId || '';
@@ -52,18 +47,7 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
   const orderRackFromServer = String(
     order?.packageRack || order?.rackNumber || order?.rack_number || order?.pickup_rack || ''
   ).trim();
-  const [rackPickOptimistic, setRackPickOptimistic] = React.useState(null);
-
-  React.useEffect(() => {
-    if (!rackPickOptimistic) return;
-    if (!orderRackFromServer) return;
-    if (orderRackFromServer === rackPickOptimistic) {
-      setRackPickOptimistic(null);
-    }
-  }, [orderRackFromServer, rackPickOptimistic]);
-
-  const packageRack = String(rackPickOptimistic || orderRackFromServer || '').trim();
-  const hasAssignedRack = Boolean(packageRack);
+  const packageRack = orderRackFromServer;
 
   const isPrintItem = (item) => {
     const rawType = String(item?.item_type || item?.type || '').toLowerCase();
@@ -128,7 +112,7 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
       case 'accepted':
         return 'Accepted';
       case 'ready':
-        return 'Ready (waiting assignment)';
+        return 'Ready';
       case 'assigned':
         return 'Assigned';
       case 'completed':
@@ -163,19 +147,20 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
 
   const handleMarkReady = async () => {
     if (isAssigningDriver) return;
-    if (!hasAssignedRack) {
-      Alert.alert('Select package rack', 'Please select the package rack before marking the order ready.');
-      return;
-    }
     try {
       setIsAssigningDriver(true);
-      await markOrderReady(orderId, packageRack);
+      const result = await markOrderReady(orderId);
+      const resolvedRack = String(
+        result?.packageRack || result?.rackNumber || result?.rack_number || result?.seedOrderRack || ''
+      ).trim();
       if (typeof refreshOrders === 'function') {
         await refreshOrders(null, { force: true });
       }
       navigation.navigate('OrdersList', {
         selectedTab: ORDER_STATUS.ACCEPTED,
-        readyNotice: 'Order marked ready. Assigning driver…',
+        readyNotice: resolvedRack
+          ? `Order marked ready. Keep package in rack ${resolvedRack}.`
+          : 'Order marked ready. Rack pending.',
       });
     } catch (error) {
       const message = error?.message || 'Failed to mark order ready';
@@ -390,19 +375,15 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
     if (statusNormalized === ORDER_STATUS.READY) {
       return (
         <View style={styles.cardFinalizeRow}>
-          <TouchableOpacity
-            style={styles.cardRackHalf}
-            onPress={() => setRackModalVisible(true)}
-            activeOpacity={0.75}
-          >
+          <View style={styles.cardRackHalf}>
             <Text style={styles.cardRackLabel}>Package rack</Text>
             <Text style={styles.cardRackValue} numberOfLines={1}>
-              {packageRack || 'Select…'}
+              {packageRack || 'Rack pending'}
             </Text>
-          </TouchableOpacity>
+          </View>
           <View style={[styles.cardAssignHalf, styles.cardAssignHalfDisabled]}>
             <Ionicons name="time-outline" size={18} color="#FFFFFF" />
-            <Text style={styles.cardAssignHalfText}>Waiting assignment</Text>
+            <Text style={styles.cardAssignHalfText}>Waiting rack pickup</Text>
           </View>
         </View>
       );
@@ -416,31 +397,20 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
       );
     }
     return (
-      <View style={styles.cardFinalizeRow}>
-        <TouchableOpacity
-          style={styles.cardRackHalf}
-          onPress={() => setRackModalVisible(true)}
-          activeOpacity={0.75}
-        >
-          <Text style={styles.cardRackLabel}>Package rack</Text>
-          <Text style={styles.cardRackValue} numberOfLines={1}>
-            {packageRack || 'Select…'}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.cardAssignHalf,
-            isAssigningDriver && styles.cardAssignHalfDisabled,
-          ]}
-          disabled={isAssigningDriver}
-          onPress={handleMarkReady}
-        >
-          <Ionicons name="checkmark-done-outline" size={18} color="#FFFFFF" />
-          <Text style={styles.cardAssignHalfText}>
-            {isAssigningDriver ? 'Saving…' : 'Mark Ready'}
-          </Text>
-        </TouchableOpacity>
-      </View>
+      <TouchableOpacity
+        style={[
+          styles.primaryButton,
+          styles.readyPrimaryButton,
+          isAssigningDriver && styles.cardAssignHalfDisabled,
+        ]}
+        disabled={isAssigningDriver}
+        onPress={handleMarkReady}
+      >
+        <Ionicons name="checkmark-done-outline" size={18} color="#FFFFFF" />
+        <Text style={styles.primaryButtonText}>
+          {isAssigningDriver ? 'Saving…' : 'Mark Ready'}
+        </Text>
+      </TouchableOpacity>
     );
   };
 
@@ -522,7 +492,7 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
           </>
         ) : null}
 
-        {hasAssignedRack ? (
+        {packageRack ? (
           <>
             <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Package rack</Text>
             <Text style={styles.detailsLineStrong}>{packageRack}</Text>
@@ -561,51 +531,6 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
 
   return (
     <View style={[styles.container, useCompactItems && styles.containerMinimal]}>
-      <Modal
-        animationType="fade"
-        transparent
-        visible={rackModalVisible}
-        onRequestClose={() => setRackModalVisible(false)}
-      >
-        <Pressable style={styles.modalBackdrop} onPress={() => setRackModalVisible(false)}>
-          <Pressable style={styles.rackPickModalCard} onPress={() => {}}>
-            <View style={styles.itemsModalHeader}>
-              <Text style={styles.itemsModalTitle}>Select package rack</Text>
-              <TouchableOpacity onPress={() => setRackModalVisible(false)} hitSlop={12}>
-                <Ionicons name="close" size={24} color="#333" />
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={styles.rackPickScroll} keyboardShouldPersistTaps="handled">
-              <View style={styles.rackPickGrid}>
-                {PACKAGE_RACK_OPTIONS_CARD.map((rack) => (
-                  <TouchableOpacity
-                    key={rack}
-                    style={[
-                      styles.rackPickOption,
-                      packageRack === rack && styles.rackPickOptionSelected,
-                    ]}
-                    onPress={() => {
-                      setRackPickOptimistic(rack);
-                      mergeOrderPackageRack(orderId, rack);
-                      setRackModalVisible(false);
-                    }}
-                  >
-                    <Text
-                      style={[
-                        styles.rackPickOptionText,
-                        packageRack === rack && styles.rackPickOptionTextSelected,
-                      ]}
-                    >
-                      {rack}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </ScrollView>
-          </Pressable>
-        </Pressable>
-      </Modal>
-
       <Modal
         animationType="fade"
         transparent
