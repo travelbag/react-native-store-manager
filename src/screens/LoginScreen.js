@@ -36,7 +36,7 @@ const LoginScreen = ({ navigation }) => {
       console.log('Login result:', result);
       if (result.success) {
         // Navigation will be handled automatically by the auth state change
-        console.log('✅ Login successful:', result.manager.name);
+        console.log('✅ Login successful:', result.manager?.name);
       } else {
         Alert.alert('Login Failed', result.error);
       }

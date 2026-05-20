@@ -29,6 +29,30 @@ const initialState = {
   error: null,
 };
 
+const getLoginPayload = (data = {}) => {
+  const payload = data.data ?? data;
+
+  return {
+    accessToken: payload.token || payload.accessToken || payload.authToken,
+    refreshToken: payload.refreshToken ?? null,
+    manager: payload.manager || payload.storeManager || payload.user || null,
+  };
+};
+
+const readResponseData = async (response) => {
+  const text = await response.text();
+
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { message: text };
+  }
+};
+
 function authReducer(state, action) {
   switch (action.type) {
     case AUTH_ACTIONS.SET_LOADING:
@@ -99,20 +123,32 @@ export function AuthProvider({ children, logoutHandlerRef }) {
         body: { username, password },
       });
 
-      const data = await response.json();
-      console.log('Login response data:', data);
+      const data = await readResponseData(response);
+      console.log('Login response data:', {
+        status: response.status,
+        ok: response.ok,
+        data,
+      });
 
       if (response.ok) {
+        const { accessToken, refreshToken, manager } = getLoginPayload(data);
+
+        if (!accessToken || !manager) {
+          const errorMessage = 'Login response from server is missing manager or token data.';
+          dispatch({ type: AUTH_ACTIONS.SET_ERROR, payload: errorMessage });
+          return { success: false, error: errorMessage };
+        }
+
         await writeAuthSession({
-          accessToken: data.token || data.accessToken || data.authToken,
-          refreshToken: data.refreshToken ?? null,
-          manager: data.manager ?? null,
+          accessToken,
+          refreshToken,
+          manager,
         });
 
-        return { success: true, manager: data.manager };
+        return { success: true, manager };
       }
 
-      const errorMessage = data.message || 'Login failed';
+      const errorMessage = data?.message || data?.error || `Login failed with status ${response.status}`;
       dispatch({ type: AUTH_ACTIONS.SET_ERROR, payload: errorMessage });
       return { success: false, error: errorMessage };
     } catch (error) {

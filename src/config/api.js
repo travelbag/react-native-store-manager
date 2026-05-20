@@ -1,24 +1,20 @@
 // API Configuration
-const DEFAULT_PRODUCTION_BASE_URL = 'https://ubgukf7hdu.us-east-1.awsapprunner.com/api';
+const USE_LOCAL_API = process.env.EXPO_PUBLIC_USE_LOCAL_API?.trim().toLowerCase() === 'true';
 
-/** LAN backend (Mac IP + API port). Change port if your server uses something other than 8080. */
-const LOCAL_API_BASE_URL = 'http://192.168.1.199:8080/api';
-
-/**
- * Set `false` to hit production (`DEFAULT_PRODUCTION_BASE_URL`).
- * Override either URL with `EXPO_PUBLIC_API_BASE_URL` in `.env` (highest priority).
- */
-const USE_LOCAL_DEVELOPMENT = false;
+const API_BASE_URLS = {
+  local: process.env.EXPO_PUBLIC_LOCAL_API_BASE_URL?.trim(),
+  prod: process.env.EXPO_PUBLIC_PROD_API_BASE_URL?.trim(),
+};
 
 function resolveBaseUrl() {
-  const envOverride = process.env.EXPO_PUBLIC_API_BASE_URL?.trim();
-  if (envOverride) {
-    return envOverride;
+  const apiTarget = USE_LOCAL_API ? 'local' : 'prod';
+  const API_BASE_URL = API_BASE_URLS[apiTarget];
+
+  if (!API_BASE_URL) {
+    throw new Error(`Missing ${apiTarget} API base URL. Check your environment variables.`);
   }
-  if (USE_LOCAL_DEVELOPMENT) {
-    return LOCAL_API_BASE_URL;
-  }
-  return DEFAULT_PRODUCTION_BASE_URL;
+
+  return API_BASE_URL.replace(/\/+$/, '');
 }
 
 export const API_CONFIG = {
