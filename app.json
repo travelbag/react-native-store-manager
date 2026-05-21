@@ -2,14 +2,14 @@
   "expo": {
     "name": "Littlekart Store Manager",
     "slug": "react-native-store-manager",
-    "version": "1.0.16",
+    "version": "1.0.17",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
       "icon": "./assets/icon.png",
       "supportsTablet": true,
-      "buildNumber": "14",
+      "buildNumber": "47",
        "infoPlist": {
         "UIBackgroundModes": ["remote-notification"],
         "ITSAppUsesNonExemptEncryption": false,
@@ -23,7 +23,7 @@
       "bundleIdentifier": "com.littlekart1.reactnativestoremanager"
     },
     "android": {
-      "versionCode": 15,
+      "versionCode": 16,
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#ffffff"
