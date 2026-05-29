@@ -496,13 +496,18 @@ const OrderPicking = ({ route, navigation }) => {
     orderStatusNorm === 'accepted';
 
   const handleMarkReady = async () => {
+    const targetOrderId = order.id || order.orderId || orderId;
+    console.log('[OrderPicking] Mark as ready tapped', { orderId: targetOrderId });
     try {
-      const targetOrderId = order.id || order.orderId || orderId;
       setIsAssigningDriver(true);
       const result = await markOrderReady(targetOrderId);
       const resolvedRack = String(
         result?.packageRack || result?.rackNumber || result?.rack_number || result?.seedOrderRack || ''
       ).trim();
+      console.log('[OrderPicking] Mark as ready success', {
+        orderId: targetOrderId,
+        rack: resolvedRack || null,
+      });
       navigation.navigate('OrdersList', {
         selectedTab: ORDER_STATUS.ACCEPTED,
         readyNotice: resolvedRack
@@ -510,6 +515,10 @@ const OrderPicking = ({ route, navigation }) => {
           : 'Order marked ready. Rack pending.',
       });
     } catch (error) {
+      console.log('[OrderPicking] Mark as ready failed', {
+        orderId: targetOrderId,
+        error: error?.message || String(error),
+      });
       const msg = error?.message || 'Failed to mark order ready. Please try again.';
       Alert.alert('Error', msg, [{ text: 'OK' }]);
     } finally {

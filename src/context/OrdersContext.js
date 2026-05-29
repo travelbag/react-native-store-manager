@@ -1281,12 +1281,14 @@ export function OrdersProvider({ children }) {
       throw new Error('Order ID is required');
     }
     const endpoint = `/orders/${orderId}/status`;
+    const fullUrl = buildApiUrl(endpoint);
     const payload = {
       status: ORDER_STATUS.READY,
     };
     console.log('[ui->api] PUT /orders/:orderId/status', {
       orderId,
       endpoint,
+      fullUrl,
       payload,
     });
     const response = await apiClient.put(endpoint, {

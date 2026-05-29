@@ -1,5 +1,11 @@
 // API Configuration
-const USE_LOCAL_API = process.env.EXPO_PUBLIC_USE_LOCAL_API?.trim().toLowerCase() === 'true';
+const rawUseLocalApiFlag = process.env.EXPO_PUBLIC_USE_LOCAL_API;
+const normalizedUseLocalApiFlag = String(rawUseLocalApiFlag ?? '').trim().toLowerCase();
+const hasExplicitUseLocalApiFlag = normalizedUseLocalApiFlag.length > 0;
+// In dev, default to local unless explicitly set to false.
+const USE_LOCAL_API = hasExplicitUseLocalApiFlag
+  ? normalizedUseLocalApiFlag === 'true'
+  : __DEV__;
 
 const API_BASE_URLS = {
   local: process.env.EXPO_PUBLIC_LOCAL_API_BASE_URL?.trim(),
@@ -44,6 +50,15 @@ export const API_CONFIG = {
   // Reduced from 10000 -> 5000 to achieve ~5s polling cadence
   POLL_INTERVAL: 5000,
 };
+
+if (__DEV__) {
+  console.log('[api-config] Environment resolution', {
+    EXPO_PUBLIC_USE_LOCAL_API: process.env.EXPO_PUBLIC_USE_LOCAL_API,
+    hasExplicitUseLocalApiFlag,
+    USE_LOCAL_API,
+    resolvedBaseUrl: API_CONFIG.BASE_URL,
+  });
+}
 
 // Helper function to build API URL
 export const buildApiUrl = (endpoint, params = '') => {
