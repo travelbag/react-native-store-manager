@@ -150,6 +150,17 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
     try {
       setIsAssigningDriver(true);
       const result = await markOrderReady(orderId);
+      console.log('[OrderCard] Assign Driver API response', {
+        orderId,
+        response: result,
+      });
+      const readyNotificationReason = String(result?.readyNotification?.reason || '').toLowerCase();
+      if (readyNotificationReason === 'no_checked_in_available_drivers') {
+        Alert.alert(
+          'No drivers available',
+          "No checked-in drivers are available right now. Please try again shortly."
+        );
+      }
       const resolvedRack = String(
         result?.packageRack || result?.rackNumber || result?.rack_number || result?.seedOrderRack || ''
       ).trim();
@@ -164,7 +175,17 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
       });
     } catch (error) {
       const message = error?.message || 'Failed to mark order ready';
-      Alert.alert('Error', message);
+      const normalizedMessage = String(message).toLowerCase();
+      const isNoDriverError =
+        normalizedMessage.includes('no drivers available') ||
+        normalizedMessage.includes('driver at max active limit') ||
+        normalizedMessage.includes('availability changed');
+
+      if (isNoDriverError) {
+        setNoDriverVisible(true);
+      } else {
+        Alert.alert('Error', message);
+      }
     } finally {
       setIsAssigningDriver(false);
     }
@@ -372,22 +393,6 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
     ));
 
   const renderAcceptedActions = () => {
-    if (statusNormalized === ORDER_STATUS.READY) {
-      return (
-        <View style={styles.cardFinalizeRow}>
-          <View style={styles.cardRackHalf}>
-            <Text style={styles.cardRackLabel}>Package rack</Text>
-            <Text style={styles.cardRackValue} numberOfLines={1}>
-              {packageRack || 'Rack pending'}
-            </Text>
-          </View>
-          <View style={[styles.cardAssignHalf, styles.cardAssignHalfDisabled]}>
-            <Ionicons name="time-outline" size={18} color="#FFFFFF" />
-            <Text style={styles.cardAssignHalfText}>Waiting rack pickup</Text>
-          </View>
-        </View>
-      );
-    }
     if (!allItemsFinalized) {
       return (
         <TouchableOpacity style={styles.primaryButton} onPress={handleStartPicking}>
@@ -400,7 +405,7 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
       <TouchableOpacity
         style={[
           styles.primaryButton,
-          styles.readyPrimaryButton,
+          styles.assignDriverButton,
           isAssigningDriver && styles.cardAssignHalfDisabled,
         ]}
         disabled={isAssigningDriver}
@@ -408,7 +413,7 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
       >
         <Ionicons name="checkmark-done-outline" size={18} color="#FFFFFF" />
         <Text style={styles.primaryButtonText}>
-          {isAssigningDriver ? 'Saving…' : 'Mark Ready'}
+          {isAssigningDriver ? 'Saving…' : 'Assign Driver'}
         </Text>
       </TouchableOpacity>
     );

@@ -501,6 +501,18 @@ const OrderPicking = ({ route, navigation }) => {
     try {
       setIsAssigningDriver(true);
       const result = await markOrderReady(targetOrderId);
+      console.log('[OrderPicking] Assign Driver API response', {
+        orderId: targetOrderId,
+        response: result,
+      });
+      const readyNotificationReason = String(result?.readyNotification?.reason || '').toLowerCase();
+      if (readyNotificationReason === 'no_checked_in_available_drivers') {
+        Alert.alert(
+          'No drivers available',
+          "No checked-in drivers are available right now. Please try again shortly.",
+          [{ text: 'OK' }]
+        );
+      }
       const resolvedRack = String(
         result?.packageRack || result?.rackNumber || result?.rack_number || result?.seedOrderRack || ''
       ).trim();
@@ -520,7 +532,20 @@ const OrderPicking = ({ route, navigation }) => {
         error: error?.message || String(error),
       });
       const msg = error?.message || 'Failed to mark order ready. Please try again.';
-      Alert.alert('Error', msg, [{ text: 'OK' }]);
+      const normalizedMessage = String(msg).toLowerCase();
+      const isNoDriverError =
+        normalizedMessage.includes('no drivers available') ||
+        normalizedMessage.includes('driver at max active limit') ||
+        normalizedMessage.includes('availability changed');
+      if (isNoDriverError) {
+        Alert.alert(
+          'No drivers available',
+          "Couldn't find an available driver right now. Please try again shortly.",
+          [{ text: 'OK' }]
+        );
+      } else {
+        Alert.alert('Error', msg, [{ text: 'OK' }]);
+      }
     } finally {
       setIsAssigningDriver(false);
     }
@@ -1036,7 +1061,7 @@ const OrderPicking = ({ route, navigation }) => {
             >
               <Ionicons name="checkmark-done-outline" size={18} color="#FFFFFF" />
               <Text style={styles.assignHalfText}>
-                {isAssigningDriver ? 'Saving…' : 'Mark Ready'}
+                {isAssigningDriver ? 'Saving…' : 'Assign Driver'}
               </Text>
             </TouchableOpacity>
           </View>
