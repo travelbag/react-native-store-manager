@@ -963,15 +963,49 @@ export function OrdersProvider({ children }) {
       });
     };
 
+    // Sequential FIFO: the backend emits this when an order's driver queue is exhausted
+    // (no driver accepted within the 60s window per driver). The order returns to the
+    // store manager so it can be re-assigned.
+    const handleOrderAssignmentReturned = (payload = {}) => {
+      const eventOrderId = normalizeValue(payload?.orderId);
+      if (!eventOrderId) return;
+
+      const payloadStoreId = normalizeStoreIdValue(payload?.storeId);
+      if (payloadStoreId && normalizedStoreId && payloadStoreId !== normalizedStoreId) return;
+
+      const existingOrder = ordersRef.current.find(
+        (order) => extractOrderIdValue(order) === eventOrderId
+      );
+      if (!existingOrder) return;
+
+      dispatch({
+        type: ACTIONS.ADD_ORDER,
+        payload: {
+          ...existingOrder,
+          status: 'accepted',
+          orderStatus: 'accepted',
+          backendStatus: 'accepted',
+          driverId: null,
+        },
+      });
+
+      DeviceEventEmitter.emit('orderAssignmentReturned', {
+        orderId: eventOrderId,
+        reason: payload?.reason || 'no_drivers',
+      });
+    };
+
     socketClient.on('connect', joinStoreRooms);
     socketClient.on('order_cancelled', handleOrderCancelled);
     socketClient.on('order_assigned', handleOrderAssigned);
+    socketClient.on('order_assignment_returned', handleOrderAssignmentReturned);
     joinStoreRooms();
 
     return () => {
       socketClient.off('connect', joinStoreRooms);
       socketClient.off('order_cancelled', handleOrderCancelled);
       socketClient.off('order_assigned', handleOrderAssigned);
+      socketClient.off('order_assignment_returned', handleOrderAssignmentReturned);
       socketClient.disconnect();
       if (socketRef.current === socketClient) {
         socketRef.current = null;
