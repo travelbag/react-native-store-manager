@@ -24,9 +24,11 @@ import { useOrders, ORDER_STATUS, ITEM_STATUS } from '../context/OrdersContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Print from 'expo-print';
+import { Image as ExpoImage } from 'expo-image';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { useHardwareBarcodeWedge } from '../hooks/useHardwareBarcodeWedge';
+import { downloadMediaToLocal, isImageMediaUrl, resolvePrintItemUrl } from '../utils/mediaUrl';
 
 const sameOrderId = (o, routeOrderId) =>
   String(o?.id ?? o?.orderId ?? '').trim() === String(routeOrderId ?? '').trim();
@@ -47,6 +49,9 @@ const OrderPicking = ({ route, navigation }) => {
   const [allPickedOrUnavailable, setAllPickedOrUnavailable] = useState(false);
   const [isAssigningDriver, setIsAssigningDriver] = useState(false);
   const [previewItem, setPreviewItem] = useState(null);
+  const [previewLocalUri, setPreviewLocalUri] = useState(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [previewLoadError, setPreviewLoadError] = useState('');
   const [isPreviewVisible, setIsPreviewVisible] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -325,17 +330,15 @@ const OrderPicking = ({ route, navigation }) => {
     return rawType === 'print' || Boolean(item?.fileUrl || item?.file_url || item?.printUrl || item?.print_url || item?.document_url || item?.documentUrl);
   };
 
-  const getPrintFileUrl = (item) =>
-    item?.fileUrl ||
-    item?.file_url ||
-    item?.printUrl ||
-    item?.print_url ||
-    item?.document_url ||
-    item?.documentUrl ||
-    '';
+  const getPrintFileUrl = (item) => resolvePrintItemUrl(item);
 
   const getPrintFileName = (item) =>
     item?.fileName || item?.file_name || item?.item_name || item?.name || 'Document';
+
+  const isPrintItemImage = (item) => {
+    const url = getPrintFileUrl(item);
+    return isImageMediaUrl(url, getPrintFileName(item));
+  };
 
   const getPrintMeta = (item) => {
     const pages = Number(item?.pages ?? item?.page_count ?? 1);
@@ -352,42 +355,41 @@ const OrderPicking = ({ route, navigation }) => {
     };
   };
 
-  const isImageUrl = (uri) => {
-    const clean = String(uri || '').split('?')[0].toLowerCase();
-    return /\.(png|jpg|jpeg|webp|gif)$/.test(clean);
-  };
+  const ensureLocalFile = async (item) =>
+    downloadMediaToLocal(getPrintFileUrl(item), getPrintFileName(item));
 
-  const sanitizeFileName = (name) => String(name || 'document').replace(/[^a-zA-Z0-9._-]/g, '_');
-
-  const getFileExtension = (url) => {
-    const clean = String(url || '').split('?')[0];
-    const parts = clean.split('.');
-    return parts.length > 1 ? parts[parts.length - 1] : '';
-  };
-
-  const ensureLocalFile = async (url, fileName) => {
-    if (!url) throw new Error('File URL is missing');
-    if (url.startsWith('file://')) return url;
-    const safeName = sanitizeFileName(fileName);
-    const ext = getFileExtension(url);
-    const nameWithExt = ext && !safeName.toLowerCase().endsWith(`.${ext.toLowerCase()}`)
-      ? `${safeName}.${ext}`
-      : safeName;
-    const baseDir = FileSystem.documentDirectory || FileSystem.cacheDirectory;
-    if (!baseDir) throw new Error('No local storage available');
-    const localUri = `${baseDir}${Date.now()}_${nameWithExt}`;
-    const download = await FileSystem.downloadAsync(url, localUri);
-    return download.uri;
-  };
-
-  const openPrintPreview = (item) => {
+  const openPrintPreview = async (item) => {
     setPreviewItem(item);
+    setPreviewLocalUri(null);
+    setPreviewLoadError('');
     setIsPreviewVisible(true);
+
+    const url = getPrintFileUrl(item);
+    if (!url) {
+      setPreviewLoadError('No file URL found for this item.');
+      return;
+    }
+
+    if (!isPrintItemImage(item)) return;
+
+    setIsPreviewLoading(true);
+    try {
+      const localUri = await downloadMediaToLocal(url, getPrintFileName(item));
+      setPreviewLocalUri(localUri);
+    } catch (e) {
+      console.warn('⚠️ Print preview load failed:', e?.message ?? e);
+      setPreviewLoadError(e?.message || 'Unable to load preview.');
+    } finally {
+      setIsPreviewLoading(false);
+    }
   };
 
   const closePrintPreview = () => {
     setIsPreviewVisible(false);
     setPreviewItem(null);
+    setPreviewLocalUri(null);
+    setPreviewLoadError('');
+    setIsPreviewLoading(false);
   };
 
   const markPrintDone = async (item) => {
@@ -424,7 +426,7 @@ const OrderPicking = ({ route, navigation }) => {
     }
     setIsPrinting(true);
     try {
-      const localUri = await ensureLocalFile(url, getPrintFileName(item));
+      const localUri = await ensureLocalFile(item);
       closePrintPreview();
       await Print.printAsync({ uri: localUri });
       await markPrintDone(item);
@@ -444,7 +446,7 @@ const OrderPicking = ({ route, navigation }) => {
     setDownloadingItemId(item?.id ?? null);
     setIsDownloading(true);
     try {
-      const localUri = await ensureLocalFile(url, getPrintFileName(item));
+      const localUri = await ensureLocalFile(item);
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(localUri);
       }
@@ -467,17 +469,23 @@ const OrderPicking = ({ route, navigation }) => {
     }
   };
 
-  const openExternalPreview = async (url) => {
-    if (!url) return;
+  const openExternalPreview = async (item) => {
+    const resolvedUrl = getPrintFileUrl(item);
+    if (!resolvedUrl) return;
     try {
-      const canOpen = await Linking.canOpenURL(url);
+      const localUri = await ensureLocalFile(item);
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(localUri);
+        return;
+      }
+      const canOpen = await Linking.canOpenURL(resolvedUrl);
       if (canOpen) {
-        await Linking.openURL(url);
+        await Linking.openURL(resolvedUrl);
       } else {
         Alert.alert('Preview not available', 'Unable to open this file.');
       }
     } catch (e) {
-      Alert.alert('Preview failed', 'Unable to open this file.');
+      Alert.alert('Preview failed', e?.message || 'Unable to open this file.');
     }
   };
 
@@ -837,8 +845,8 @@ const OrderPicking = ({ route, navigation }) => {
   const scannedItems = safeItems.filter(item => item.status === ITEM_STATUS.SCANNED).length;
   const unavailableItems = safeItems.filter(item => item.status === ITEM_STATUS.UNAVAILABLE).length;
   const totalItems = safeItems.length;
-  const previewUrl = previewItem ? getPrintFileUrl(previewItem) : '';
   const previewMeta = previewItem ? getPrintMeta(previewItem) : null;
+  const previewIsImage = previewItem ? isPrintItemImage(previewItem) : false;
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
@@ -895,19 +903,31 @@ const OrderPicking = ({ route, navigation }) => {
               <>
                 <Text style={styles.previewFileName}>{getPrintFileName(previewItem)}</Text>
                 <View style={styles.previewBody}>
-                  {previewUrl && isImageUrl(previewUrl) ? (
-                    <Image source={{ uri: previewUrl }} style={styles.previewImage} resizeMode="contain" />
+                  {isPreviewLoading ? (
+                    <View style={styles.previewPlaceholder}>
+                      <ActivityIndicator size="large" color="#007AFF" />
+                      <Text style={styles.previewPlaceholderText}>Loading preview...</Text>
+                    </View>
+                  ) : previewLoadError ? (
+                    <View style={styles.previewPlaceholder}>
+                      <Ionicons name="alert-circle-outline" size={44} color="#B42318" />
+                      <Text style={styles.previewPlaceholderText}>{previewLoadError}</Text>
+                    </View>
+                  ) : previewIsImage && previewLocalUri ? (
+                    <ExpoImage source={{ uri: previewLocalUri }} style={styles.previewImage} contentFit="contain" />
                   ) : (
                     <View style={styles.previewPlaceholder}>
                       <Ionicons name="document-text-outline" size={44} color="#666666" />
-                      <Text style={styles.previewPlaceholderText}>Preview not available</Text>
-                      {previewUrl ? (
+                      <Text style={styles.previewPlaceholderText}>
+                        {previewIsImage ? 'Preview not available' : 'Preview not available for this file type'}
+                      </Text>
+                      {previewItem ? (
                         <TouchableOpacity
                           style={styles.previewLinkButton}
-                          onPress={() => openExternalPreview(previewUrl)}
+                          onPress={() => openExternalPreview(previewItem)}
                         >
                           <Ionicons name="open-outline" size={16} color="#007AFF" />
-                          <Text style={styles.previewLinkText}>Open Preview</Text>
+                          <Text style={styles.previewLinkText}>Open File</Text>
                         </TouchableOpacity>
                       ) : null}
                     </View>

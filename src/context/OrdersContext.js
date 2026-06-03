@@ -10,6 +10,7 @@ import {
 import { API_CONFIG, buildApiUrl } from '../config/api';
 import { apiClient } from '../services/apiClient';
 import { assignDriver, wasOrderAssigned } from '../services/DriverService';
+import { resolvePrintItemUrl } from '../utils/mediaUrl';
 import { useAuth } from './AuthContext';
 
 const OrdersContext = createContext();
@@ -477,14 +478,7 @@ export function OrdersProvider({ children }) {
 
         if (isPrintItem) {
           const backendItemId = item?.id ?? item?.item_id ?? item?.itemId ?? null;
-          const fileUrl =
-            item?.file_url ||
-            item?.fileUrl ||
-            item?.print_url ||
-            item?.printUrl ||
-            item?.document_url ||
-            item?.documentUrl ||
-            '';
+          const fileUrl = resolvePrintItemUrl(item);
           const fileName =
             item?.file_name ||
             item?.fileName ||
