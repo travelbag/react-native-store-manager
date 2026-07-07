@@ -18,6 +18,8 @@ import {
   ScrollView,
   useWindowDimensions,
   BackHandler,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { useOrders, ORDER_STATUS, ITEM_STATUS } from '../context/OrdersContext';
@@ -65,10 +67,31 @@ const OrderPicking = ({ route, navigation }) => {
   const wedgeLockRef = useRef(false);
   const orderRef = useRef(null);
   const safeItemsRef = useRef([]);
+  const pickListRef = useRef(null);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
   const bottomBarInsetStyle = { paddingBottom: Math.max(insets.bottom, 12) };
+  const pickupKeyboardOffset =
+    keyboardHeight > 0 ? Math.max(0, keyboardHeight - insets.bottom) : 0;
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, (event) => {
+      setKeyboardHeight(event?.endCoordinates?.height ?? 0);
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   // Find the current order (normalize id types so list updates always match this screen)
   useEffect(() => {
@@ -1080,7 +1103,13 @@ const OrderPicking = ({ route, navigation }) => {
         </Pressable>
       </Modal>
 
+      <KeyboardAvoidingView
+        style={styles.keyboardAvoidingContainer}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
+      >
       <FlatList
+        ref={pickListRef}
         style={styles.pickList}
         data={safeItems}
         renderItem={renderItemCard}
@@ -1093,7 +1122,15 @@ const OrderPicking = ({ route, navigation }) => {
           ].join(':')
         }
         contentContainerStyle={styles.pickListContent}
-        ListFooterComponent={<View style={styles.listFooterSpacer} />}
+        keyboardShouldPersistTaps="handled"
+        ListFooterComponent={
+          <View
+            style={[
+              styles.listFooterSpacer,
+              canCompletePickup && styles.listFooterSpacerPickup,
+            ]}
+          />
+        }
       />
 
       {canMarkReady ? (
@@ -1131,7 +1168,13 @@ const OrderPicking = ({ route, navigation }) => {
       ) : null}
 
       {canCompletePickup ? (
-        <View style={[styles.bottomAssignBar, bottomBarInsetStyle]}>
+        <View
+          style={[
+            styles.bottomAssignBar,
+            bottomBarInsetStyle,
+            pickupKeyboardOffset > 0 && { marginBottom: pickupKeyboardOffset },
+          ]}
+        >
           <Text style={styles.pickupHandoverTitle}>Complete pickup</Text>
           <Text style={styles.pickupHandoverHint} numberOfLines={3}>
             Accept pickup SMS OTP or Delivery OTP from the customer's LittleKart app.
@@ -1145,6 +1188,11 @@ const OrderPicking = ({ route, navigation }) => {
               maxLength={4}
               style={styles.pickupOtpInputField}
               returnKeyType="done"
+              onFocus={() => {
+                requestAnimationFrame(() => {
+                  pickListRef.current?.scrollToEnd({ animated: true });
+                });
+              }}
               onSubmitEditing={() => {
                 void handleCompletePickup();
               }}
@@ -1166,6 +1214,7 @@ const OrderPicking = ({ route, navigation }) => {
           </View>
         </View>
       ) : null}
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 };
@@ -1174,6 +1223,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F2F2F7',
+  },
+  keyboardAvoidingContainer: {
+    flex: 1,
   },
   header: {
     flexDirection: 'row',
@@ -1248,6 +1300,9 @@ const styles = StyleSheet.create({
   },
   listFooterSpacer: {
     height: 20,
+  },
+  listFooterSpacerPickup: {
+    height: 120,
   },
   itemCardCompact: {
     backgroundColor: '#FFFFFF',
