@@ -22,6 +22,7 @@ export const ORDER_STATUS = {
   READY: 'ready',
   ASSIGNED: 'assigned',
   COMPLETED: 'delivered',
+  PICKUP_AT_STORE: 'pickup_at_store',
   REJECTED: 'rejected',
 };
 
@@ -73,7 +74,20 @@ const canonicalizeOrderStatus = (value) => {
   const s = normalizeStatusValue(value);
   if (!s) return ORDER_STATUS.PENDING;
   if (ASSIGNED_ORDER_STATUS_ALIASES.has(s)) return ORDER_STATUS.ASSIGNED;
+  if (s === 'pickedup') return 'picked_up';
   return s;
+};
+
+export const isPickupFulfillmentOrder = (order = {}) =>
+  String(order?.fulfillmentType ?? order?.fulfillment_type ?? 'delivery').trim().toLowerCase() === 'pickup';
+
+export const isPickupReadyOrder = (order = {}) =>
+  isPickupFulfillmentOrder(order) && canonicalizeOrderStatus(order?.status ?? order?.orderStatus) === ORDER_STATUS.READY;
+
+export const isPickupCompletedOrder = (order = {}) => {
+  if (!isPickupFulfillmentOrder(order)) return false;
+  const status = canonicalizeOrderStatus(order?.status ?? order?.orderStatus);
+  return status === 'picked_up' || status === ORDER_STATUS.COMPLETED;
 };
 
 /** Backend often sends `confirmed` for brand-new orders; treat like pending for alerts */
@@ -414,6 +428,7 @@ export function OrdersProvider({ children }) {
       if (
         status === ORDER_STATUS.ASSIGNED ||
         status === ORDER_STATUS.COMPLETED ||
+        status === 'picked_up' ||
         status === 'cancelled' ||
         status === ORDER_STATUS.REJECTED
       ) {
@@ -593,6 +608,8 @@ export function OrdersProvider({ children }) {
       acceptedByManagerId: orderRaw.acceptedByManagerId ?? orderRaw.accepted_by_manager_id ?? null,
       acceptedByManagerName: orderRaw.acceptedByManagerName ?? orderRaw.accepted_by_manager_name ?? null,
       acceptedAt: orderRaw.acceptedAt ?? orderRaw.accepted_at ?? null,
+      fulfillmentType: orderRaw.fulfillmentType ?? orderRaw.fulfillment_type ?? 'delivery',
+      fulfillment_type: orderRaw.fulfillmentType ?? orderRaw.fulfillment_type ?? 'delivery',
     };
   }, [createLocalItemId]);
 
@@ -1346,6 +1363,12 @@ export function OrdersProvider({ children }) {
           status: responseData?.status ?? responseData?.order?.status ?? ORDER_STATUS.READY,
           orderStatus:
             responseData?.status ?? responseData?.order?.orderStatus ?? responseData?.order?.status ?? ORDER_STATUS.READY,
+          fulfillmentType:
+            responseData?.fulfillmentType
+            ?? responseData?.fulfillment_type
+            ?? existingOrder?.fulfillmentType
+            ?? existingOrder?.fulfillment_type
+            ?? 'delivery',
         })
       : null;
     const updatedOrderFromApi = responseData?.order ? normalizeOrder(responseData.order) : normalizedTopLevelReadyResponse;
@@ -1371,6 +1394,37 @@ export function OrdersProvider({ children }) {
       applyOrdersSnapshot(orders);
     } catch (fetchError) {
       console.warn('⚠️ Failed to refresh orders after mark ready:', fetchError);
+    }
+    return responseData;
+  };
+
+  const markOrderPickedUp = async (orderId, pickupOtp) => {
+    if (!orderId) {
+      throw new Error('Order ID is required');
+    }
+    const response = await apiClient.put(`/orders/${orderId}/status`, {
+      body: {
+        status: 'picked_up',
+        pickupOtp: String(pickupOtp || '').trim(),
+      },
+    });
+    let responseData = null;
+    try {
+      responseData = await response.json();
+    } catch (_) {
+      responseData = null;
+    }
+    if (!response.ok) {
+      throw new Error(
+        responseData?.message || responseData?.error || 'Failed to complete pickup'
+      );
+    }
+    updateOrderStatus(orderId, 'picked_up');
+    try {
+      const orders = await fetchOrdersFromDB();
+      applyOrdersSnapshot(orders);
+    } catch (fetchError) {
+      console.warn('Failed to refresh orders after pickup completion:', fetchError);
     }
     return responseData;
   };
@@ -1589,6 +1643,7 @@ export function OrdersProvider({ children }) {
   persistItemScan,
     completePickingAndAssignDriver,
     markOrderReady,
+    markOrderPickedUp,
     mergeOrderPackageRack,
     completeOrder,
     removeOrder,

@@ -12,7 +12,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useOrders, ORDER_STATUS, ITEM_STATUS } from '../context/OrdersContext';
+import { useOrders, ORDER_STATUS, ITEM_STATUS, isPickupFulfillmentOrder } from '../context/OrdersContext';
 import { useNavigation } from '@react-navigation/native';
 
 const OrderCard = ({ order, hideStatusBadge = false }) => {
@@ -48,6 +48,7 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
     order?.packageRack || order?.rackNumber || order?.rack_number || order?.pickup_rack || ''
   ).trim();
   const packageRack = orderRackFromServer;
+  const isPickupOrder = isPickupFulfillmentOrder(order);
 
   const isPrintItem = (item) => {
     const rawType = String(item?.item_type || item?.type || '').toLowerCase();
@@ -150,10 +151,25 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
     try {
       setIsAssigningDriver(true);
       const result = await markOrderReady(orderId);
-      console.log('[OrderCard] Assign Driver API response', {
+      console.log('[OrderCard] Mark ready API response', {
         orderId,
         response: result,
       });
+      if (isPickupOrder) {
+        Alert.alert(
+          'Pickup order ready',
+          'Customer has been notified by SMS with the pickup OTP.',
+          [{ text: 'OK' }]
+        );
+        if (typeof refreshOrders === 'function') {
+          await refreshOrders(null, { force: true });
+        }
+        navigation.navigate('OrdersList', {
+          selectedTab: ORDER_STATUS.PICKUP_AT_STORE,
+          readyNotice: 'Pickup order marked ready. Customer notified by SMS.',
+        });
+        return;
+      }
       const readyNotificationReason = String(result?.readyNotification?.reason || '').toLowerCase();
       if (readyNotificationReason === 'no_checked_in_available_drivers') {
         Alert.alert(
@@ -393,6 +409,44 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
     ));
 
   const renderAcceptedActions = () => {
+    if (isPickupOrder) {
+      if (statusNormalized === ORDER_STATUS.READY) {
+        return (
+          <TouchableOpacity
+            style={[styles.primaryButton, styles.pickupCompleteButton]}
+            onPress={() => navigation.navigate('OrderPicking', { orderId })}
+          >
+            <Ionicons name="bag-check-outline" size={18} color="#FFFFFF" />
+            <Text style={styles.primaryButtonText}>Complete Pickup</Text>
+          </TouchableOpacity>
+        );
+      }
+      if (!allItemsFinalized) {
+        return (
+          <TouchableOpacity style={styles.primaryButton} onPress={handleStartPicking}>
+            <Ionicons name="basket-outline" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
+            <Text style={styles.primaryButtonText}>Start Picking</Text>
+          </TouchableOpacity>
+        );
+      }
+      return (
+        <TouchableOpacity
+          style={[
+            styles.primaryButton,
+            styles.pickupReadyButton,
+            isAssigningDriver && styles.cardAssignHalfDisabled,
+          ]}
+          disabled={isAssigningDriver}
+          onPress={handleMarkReady}
+        >
+          <Ionicons name="notifications-outline" size={18} color="#FFFFFF" />
+          <Text style={styles.primaryButtonText}>
+            {isAssigningDriver ? 'Notifying…' : 'Mark Ready & Notify'}
+          </Text>
+        </TouchableOpacity>
+      );
+    }
+
     if (!allItemsFinalized) {
       return (
         <TouchableOpacity style={styles.primaryButton} onPress={handleStartPicking}>
@@ -1249,6 +1303,12 @@ const styles = StyleSheet.create({
   },
   assignDriverButton: {
     backgroundColor: '#16A34A',
+  },
+  pickupReadyButton: {
+    backgroundColor: '#0F766E',
+  },
+  pickupCompleteButton: {
+    backgroundColor: '#2563EB',
   },
   primaryButtonDisabled: {
     opacity: 0.6,

@@ -21,7 +21,7 @@ import {
 } from 'react-native';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { useOrders, ORDER_STATUS, ITEM_STATUS } from '../context/OrdersContext';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Print from 'expo-print';
 import { Image as ExpoImage } from 'expo-image';
@@ -43,11 +43,14 @@ const OrderPicking = ({ route, navigation }) => {
     markItemUnavailable,
     persistItemScan,
     markOrderReady,
+    markOrderPickedUp,
   } = useOrders();
   
   const [order, setOrder] = useState(null);
   const [allPickedOrUnavailable, setAllPickedOrUnavailable] = useState(false);
   const [isAssigningDriver, setIsAssigningDriver] = useState(false);
+  const [pickupOtpInput, setPickupOtpInput] = useState('');
+  const [isCompletingPickup, setIsCompletingPickup] = useState(false);
   const [previewItem, setPreviewItem] = useState(null);
   const [previewLocalUri, setPreviewLocalUri] = useState(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
@@ -64,6 +67,8 @@ const OrderPicking = ({ route, navigation }) => {
   const safeItemsRef = useRef([]);
 
   const isFocused = useIsFocused();
+  const insets = useSafeAreaInsets();
+  const bottomBarInsetStyle = { paddingBottom: Math.max(insets.bottom, 12) };
 
   // Find the current order (normalize id types so list updates always match this screen)
   useEffect(() => {
@@ -498,39 +503,46 @@ const OrderPicking = ({ route, navigation }) => {
   }
 
   const orderStatusNorm = normalizeStatus(order.status ?? order.orderStatus);
+  const isPickupOrder =
+    String(order?.fulfillmentType ?? order?.fulfillment_type ?? 'delivery').toLowerCase() === 'pickup';
   const canMarkReady =
     allPickedOrUnavailable &&
-    !['ready', 'assigned', 'delivered', 'completed', 'cancelled'].includes(orderStatusNorm) &&
+    !['ready', 'assigned', 'delivered', 'completed', 'cancelled', 'picked_up', 'pickedup'].includes(orderStatusNorm) &&
     orderStatusNorm === 'accepted';
+  const canCompletePickup =
+    isPickupOrder &&
+    ['ready'].includes(orderStatusNorm);
 
   const handleMarkReady = async () => {
     const targetOrderId = order.id || order.orderId || orderId;
-    console.log('[OrderPicking] Mark as ready tapped', { orderId: targetOrderId });
+    console.log('[OrderPicking] Mark as ready tapped', { orderId: targetOrderId, isPickupOrder });
     try {
       setIsAssigningDriver(true);
       const result = await markOrderReady(targetOrderId);
-      console.log('[OrderPicking] Assign Driver API response', {
-        orderId: targetOrderId,
-        response: result,
-      });
-      const readyNotificationReason = String(result?.readyNotification?.reason || '').toLowerCase();
-      if (readyNotificationReason === 'no_checked_in_available_drivers') {
+      if (isPickupOrder) {
         Alert.alert(
-          'No drivers available',
-          "No checked-in drivers are available right now. Please try again shortly.",
+          'Pickup order ready',
+          'Customer has been notified by SMS with the pickup OTP.',
           [{ text: 'OK' }]
         );
+      } else {
+        const readyNotificationReason = String(result?.readyNotification?.reason || '').toLowerCase();
+        if (readyNotificationReason === 'no_checked_in_available_drivers') {
+          Alert.alert(
+            'No drivers available',
+            "No checked-in drivers are available right now. Please try again shortly.",
+            [{ text: 'OK' }]
+          );
+        }
       }
       const resolvedRack = String(
         result?.packageRack || result?.rackNumber || result?.rack_number || result?.seedOrderRack || ''
       ).trim();
-      console.log('[OrderPicking] Mark as ready success', {
-        orderId: targetOrderId,
-        rack: resolvedRack || null,
-      });
       navigation.navigate('OrdersList', {
-        selectedTab: ORDER_STATUS.ACCEPTED,
-        readyNotice: resolvedRack
+        selectedTab: isPickupOrder ? ORDER_STATUS.PICKUP_AT_STORE : ORDER_STATUS.ACCEPTED,
+        readyNotice: isPickupOrder
+          ? 'Pickup order marked ready. Customer notified by SMS.'
+          : resolvedRack
           ? `Order marked ready. Keep package in rack ${resolvedRack}.`
           : 'Order marked ready. Rack pending.',
       });
@@ -556,6 +568,30 @@ const OrderPicking = ({ route, navigation }) => {
       }
     } finally {
       setIsAssigningDriver(false);
+    }
+  };
+
+  const handleCompletePickup = async () => {
+    const targetOrderId = order.id || order.orderId || orderId;
+    const otp = String(pickupOtpInput || '').trim();
+    if (!/^\d{4}$/.test(otp)) {
+      Alert.alert('Invalid OTP', 'Enter pickup SMS OTP or Delivery OTP from the customer app.');
+      return;
+    }
+    try {
+      setIsCompletingPickup(true);
+      await markOrderPickedUp(targetOrderId, otp);
+      Alert.alert('Pickup complete', 'Order marked as picked up.', [{ text: 'OK' }]);
+      navigation.navigate('OrdersList', { selectedTab: ORDER_STATUS.COMPLETED });
+    } catch (error) {
+      const message = error?.message || 'Failed to complete pickup.';
+      const isExpired = String(message).toLowerCase().includes('expired');
+      Alert.alert(
+        isExpired ? 'OTP expired' : 'Error',
+        message,
+      );
+    } finally {
+      setIsCompletingPickup(false);
     }
   };
 
@@ -1061,18 +1097,20 @@ const OrderPicking = ({ route, navigation }) => {
       />
 
       {canMarkReady ? (
-        <View style={styles.bottomAssignBar}>
+        <View style={[styles.bottomAssignBar, bottomBarInsetStyle]}>
           <View style={styles.readyRowTop}>
             <Ionicons name="checkmark-circle" size={18} color="#34C759" />
             <Text style={styles.readyMessageOneLine} numberOfLines={2}>
-              All items processed — mark order ready.
+              {isPickupOrder
+                ? 'All items processed — mark ready and notify customer.'
+                : 'All items processed — mark order ready.'}
             </Text>
           </View>
           <View style={styles.readyActionsRow}>
             <TouchableOpacity
               style={[
-                styles.assignHalf,
-                isAssigningDriver && styles.assignHalfDisabled,
+                styles.markReadyButton,
+                isAssigningDriver && styles.markReadyButtonDisabled,
               ]}
               disabled={isAssigningDriver}
               onPress={() => {
@@ -1080,8 +1118,49 @@ const OrderPicking = ({ route, navigation }) => {
               }}
             >
               <Ionicons name="checkmark-done-outline" size={18} color="#FFFFFF" />
-              <Text style={styles.assignHalfText}>
-                {isAssigningDriver ? 'Saving…' : 'Assign Driver'}
+              <Text style={styles.markReadyButtonText}>
+                {isAssigningDriver
+                  ? 'Saving…'
+                  : isPickupOrder
+                  ? 'Mark Ready & Notify'
+                  : 'Assign Driver'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
+
+      {canCompletePickup ? (
+        <View style={[styles.bottomAssignBar, bottomBarInsetStyle]}>
+          <Text style={styles.pickupHandoverTitle}>Complete pickup</Text>
+          <Text style={styles.pickupHandoverHint} numberOfLines={3}>
+            Accept pickup SMS OTP or Delivery OTP from the customer's LittleKart app.
+          </Text>
+          <View style={styles.pickupCompleteRow}>
+            <TextInput
+              value={pickupOtpInput}
+              onChangeText={setPickupOtpInput}
+              placeholder="OTP"
+              keyboardType="number-pad"
+              maxLength={4}
+              style={styles.pickupOtpInputField}
+              returnKeyType="done"
+              onSubmitEditing={() => {
+                void handleCompletePickup();
+              }}
+            />
+            <TouchableOpacity
+              style={[
+                styles.pickupCompleteButton,
+                isCompletingPickup && styles.pickupCompleteButtonDisabled,
+              ]}
+              disabled={isCompletingPickup}
+              onPress={() => {
+                void handleCompletePickup();
+              }}
+            >
+              <Text style={styles.pickupCompleteButtonText}>
+                {isCompletingPickup ? 'Saving…' : 'Complete'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -1545,6 +1624,71 @@ const styles = StyleSheet.create({
     backgroundColor: '#A8B0BC',
   },
   assignHalfText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  markReadyButton: {
+    flex: 1,
+    backgroundColor: '#34C759',
+    borderRadius: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    minHeight: 52,
+    paddingHorizontal: 12,
+  },
+  markReadyButtonDisabled: {
+    backgroundColor: '#A8B0BC',
+  },
+  markReadyButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  pickupHandoverTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 4,
+  },
+  pickupHandoverHint: {
+    fontSize: 13,
+    color: '#6B7280',
+    marginBottom: 12,
+    lineHeight: 18,
+  },
+  pickupCompleteRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  pickupOtpInputField: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 20,
+    letterSpacing: 6,
+    textAlign: 'center',
+    minHeight: 52,
+  },
+  pickupCompleteButton: {
+    backgroundColor: '#34C759',
+    borderRadius: 10,
+    minHeight: 52,
+    paddingHorizontal: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pickupCompleteButtonDisabled: {
+    backgroundColor: '#A8B0BC',
+  },
+  pickupCompleteButtonText: {
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '700',

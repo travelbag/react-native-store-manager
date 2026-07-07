@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useOrders, ORDER_STATUS } from '../context/OrdersContext';
+import { useOrders, ORDER_STATUS, isPickupFulfillmentOrder, isPickupReadyOrder, isPickupCompletedOrder } from '../context/OrdersContext';
 import { useAuth } from '../context/AuthContext';
 import OrderCard from '../components/OrderCard';
 import { useFocusEffect } from '@react-navigation/native';
@@ -86,6 +86,9 @@ const OrdersScreen = ({ route, navigation }) => {
 
   const isAcceptedTabStatus = (o) => {
     const s = normalizeStatus(o.status ?? o.orderStatus);
+    if (isPickupFulfillmentOrder(o) && s === ORDER_STATUS.READY) {
+      return false;
+    }
     return s === 'accepted' || s === ORDER_STATUS.READY;
   };
 
@@ -100,15 +103,26 @@ const OrdersScreen = ({ route, navigation }) => {
       label: 'Accepted', 
       count: safeOrders.filter(isAcceptedTabStatus).length 
     },
+    {
+      key: ORDER_STATUS.PICKUP_AT_STORE,
+      label: 'Pick at Store',
+      count: safeOrders.filter((o) => isPickupReadyOrder(o)).length,
+    },
     { 
       key: ORDER_STATUS.ASSIGNED, 
       label: 'Assigned', 
-      count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === 'assigned').length 
+      count: safeOrders.filter(o => {
+        const s = normalizeStatus(o.status ?? o.orderStatus);
+        return s === 'assigned' && !isPickupFulfillmentOrder(o);
+      }).length 
     },
     { 
       key: ORDER_STATUS.COMPLETED, 
       label: 'Delivered', 
-      count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === 'delivered').length 
+      count: safeOrders.filter(o => {
+        const s = normalizeStatus(o.status ?? o.orderStatus);
+        return s === 'delivered' || isPickupCompletedOrder(o);
+      }).length 
     },
     { 
       key: 'cancelled', 
@@ -121,8 +135,17 @@ const OrdersScreen = ({ route, navigation }) => {
   const filteredOrders = safeOrders.filter(order => {
     const orderStatus = normalizeStatus(order.status ?? order.orderStatus);
     const filter = normalizeStatus(selectedFilter);
+    if (filter === normalizeStatus(ORDER_STATUS.PICKUP_AT_STORE)) {
+      return isPickupReadyOrder(order);
+    }
     if (filter === normalizeStatus(ORDER_STATUS.ACCEPTED)) {
-      return orderStatus === 'accepted' || orderStatus === ORDER_STATUS.READY;
+      return orderStatus === 'accepted' || (orderStatus === ORDER_STATUS.READY && !isPickupFulfillmentOrder(order));
+    }
+    if (filter === normalizeStatus(ORDER_STATUS.COMPLETED)) {
+      return orderStatus === 'delivered' || isPickupCompletedOrder(order);
+    }
+    if (filter === normalizeStatus(ORDER_STATUS.ASSIGNED)) {
+      return orderStatus === 'assigned' && !isPickupFulfillmentOrder(order);
     }
     return orderStatus === filter;
   });
@@ -158,6 +181,7 @@ const OrdersScreen = ({ route, navigation }) => {
   const hideStatusBadge =
     selectedFilter === ORDER_STATUS.ASSIGNED ||
     selectedFilter === ORDER_STATUS.COMPLETED ||
+    selectedFilter === ORDER_STATUS.PICKUP_AT_STORE ||
     selectedFilter === 'cancelled';
 
   const renderOrderItem = ({ item }) => (
