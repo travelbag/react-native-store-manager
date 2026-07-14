@@ -74,20 +74,40 @@ const canonicalizeOrderStatus = (value) => {
   const s = normalizeStatusValue(value);
   if (!s) return ORDER_STATUS.PENDING;
   if (ASSIGNED_ORDER_STATUS_ALIASES.has(s)) return ORDER_STATUS.ASSIGNED;
-  if (s === 'pickedup') return 'picked_up';
+  // Store pickup completion is terminal — surface as Delivered in the UI.
+  if (s === 'pickedup' || s === 'picked_up') return ORDER_STATUS.COMPLETED;
+  if (s === 'completed') return ORDER_STATUS.COMPLETED;
   return s;
 };
 
-export const isPickupFulfillmentOrder = (order = {}) =>
-  String(order?.fulfillmentType ?? order?.fulfillment_type ?? 'delivery').trim().toLowerCase() === 'pickup';
+export const isPickupFulfillmentOrder = (order = {}) => {
+  const fulfillment = String(order?.fulfillmentType ?? order?.fulfillment_type ?? '')
+    .trim()
+    .toLowerCase();
+  if (fulfillment === 'pickup') return true;
+  const deliveryType = String(order?.deliveryType ?? order?.delivery_type ?? '')
+    .trim()
+    .toLowerCase();
+  return (
+    deliveryType === 'pickup' ||
+    deliveryType === 'store_pickup' ||
+    deliveryType === 'pickup_at_store'
+  );
+};
 
 export const isPickupReadyOrder = (order = {}) =>
   isPickupFulfillmentOrder(order) && canonicalizeOrderStatus(order?.status ?? order?.orderStatus) === ORDER_STATUS.READY;
 
 export const isPickupCompletedOrder = (order = {}) => {
+  const rawStatus = normalizeStatusValue(order?.status ?? order?.orderStatus);
+  if (rawStatus === 'picked_up' || rawStatus === 'pickedup') return true;
+  if (order?.pickedUpAtStore) {
+    const status = canonicalizeOrderStatus(rawStatus);
+    return status === ORDER_STATUS.COMPLETED;
+  }
   if (!isPickupFulfillmentOrder(order)) return false;
-  const status = canonicalizeOrderStatus(order?.status ?? order?.orderStatus);
-  return status === 'picked_up' || status === ORDER_STATUS.COMPLETED;
+  const status = canonicalizeOrderStatus(rawStatus);
+  return status === ORDER_STATUS.COMPLETED || status === 'picked_up';
 };
 
 /** Backend often sends `confirmed` for brand-new orders; treat like pending for alerts */
@@ -216,17 +236,62 @@ function ordersReducer(state, action) {
               existingOrder?.pickup_rack ??
               ''
           ).trim();
-          uniqueOrders.push(
-            !incomingRack && existingRack
-              ? {
-                  ...order,
-                  packageRack: existingRack,
-                  rackNumber: existingRack,
-                  rack_number: existingRack,
-                  pickup_rack: existingRack,
-                }
-              : order
-          );
+          const existingIsPickup =
+            Boolean(existingOrder?.pickedUpAtStore) ||
+            String(existingOrder?.fulfillmentType ?? existingOrder?.fulfillment_type ?? '')
+              .trim()
+              .toLowerCase() === 'pickup';
+          const incomingIsPickup =
+            Boolean(order?.pickedUpAtStore) ||
+            String(order?.fulfillmentType ?? order?.fulfillment_type ?? '')
+              .trim()
+              .toLowerCase() === 'pickup';
+          let merged = order;
+          if (!incomingRack && existingRack) {
+            merged = {
+              ...merged,
+              packageRack: existingRack,
+              rackNumber: existingRack,
+              rack_number: existingRack,
+              pickup_rack: existingRack,
+            };
+          }
+          // Keep store-pickup identity across refreshes so Delivered tab + highlight stay correct.
+          if (existingIsPickup && !incomingIsPickup) {
+            merged = {
+              ...merged,
+              fulfillmentType: 'pickup',
+              fulfillment_type: 'pickup',
+              pickedUpAtStore: true,
+            };
+          } else if (existingOrder?.pickedUpAtStore || order?.pickedUpAtStore) {
+            merged = {
+              ...merged,
+              pickedUpAtStore: true,
+            };
+          }
+          // Completed store pickups always stay as Delivered in the manager app.
+          if (merged.pickedUpAtStore) {
+            const mergedStatus = String(merged.status ?? merged.orderStatus ?? '').toLowerCase();
+            if (
+              mergedStatus === 'picked_up' ||
+              mergedStatus === 'pickedup' ||
+              mergedStatus === 'delivered' ||
+              mergedStatus === 'completed' ||
+              existingOrder?.pickedUpAtStore
+            ) {
+              merged = {
+                ...merged,
+                status: ORDER_STATUS.COMPLETED,
+                orderStatus: ORDER_STATUS.COMPLETED,
+                backendStatus: ORDER_STATUS.COMPLETED,
+                pickedUpAtStore: true,
+                fulfillmentType: 'pickup',
+                fulfillment_type: 'pickup',
+              };
+            }
+          }
+          uniqueOrders.push(merged);
           seenOrderIds.add(key);
         }
       }
@@ -428,7 +493,9 @@ export function OrdersProvider({ children }) {
       if (
         status === ORDER_STATUS.ASSIGNED ||
         status === ORDER_STATUS.COMPLETED ||
+        status === 'completed' ||
         status === 'picked_up' ||
+        status === 'pickedup' ||
         status === 'cancelled' ||
         status === ORDER_STATUS.REJECTED
       ) {
@@ -574,6 +641,27 @@ export function OrdersProvider({ children }) {
       ORDER_STATUS.PENDING;
     const driverId = orderRaw.driverId ?? orderRaw.driver_id ?? orderRaw.driver?.id ?? null;
     const orderStatusCanonical = canonicalizeOrderStatus(rawOrderStatus);
+    const rawStatusNormalized = normalizeStatusValue(rawOrderStatus);
+    const fulfillmentFromFields = String(
+      orderRaw.fulfillmentType ?? orderRaw.fulfillment_type ?? ''
+    )
+      .trim()
+      .toLowerCase();
+    const deliveryTypeRaw = String(orderRaw.deliveryType ?? orderRaw.delivery_type ?? '')
+      .trim()
+      .toLowerCase();
+    const isPickupFulfillment =
+      fulfillmentFromFields === 'pickup' ||
+      fulfillmentFromFields === 'store_pickup' ||
+      fulfillmentFromFields === 'pickup_at_store' ||
+      deliveryTypeRaw === 'pickup' ||
+      deliveryTypeRaw === 'store_pickup' ||
+      deliveryTypeRaw === 'pickup_at_store';
+    const pickedUpAtStore =
+      Boolean(orderRaw.pickedUpAtStore) ||
+      rawStatusNormalized === 'picked_up' ||
+      rawStatusNormalized === 'pickedup' ||
+      (isPickupFulfillment && orderStatusCanonical === ORDER_STATUS.COMPLETED);
 
     return {
       id: orderId,
@@ -589,7 +677,7 @@ export function OrdersProvider({ children }) {
       phoneNumber: orderRaw.phoneNumber ?? orderRaw.customer_phone ?? '',
       estimatedTime: orderRaw.estimatedTime ?? 30,
       orderType: orderRaw.orderType ?? 'grocery',
-      deliveryType: orderRaw.deliveryType ?? 'home_delivery',
+      deliveryType: orderRaw.deliveryType ?? orderRaw.delivery_type ?? 'home_delivery',
       specialInstructions: orderRaw.specialInstructions ?? '',
       storeId: orderRaw.storeId ?? orderRaw.store_id ?? '',
       deliveryLatitude: orderRaw.deliveryLatitude ?? '',
@@ -608,8 +696,13 @@ export function OrdersProvider({ children }) {
       acceptedByManagerId: orderRaw.acceptedByManagerId ?? orderRaw.accepted_by_manager_id ?? null,
       acceptedByManagerName: orderRaw.acceptedByManagerName ?? orderRaw.accepted_by_manager_name ?? null,
       acceptedAt: orderRaw.acceptedAt ?? orderRaw.accepted_at ?? null,
-      fulfillmentType: orderRaw.fulfillmentType ?? orderRaw.fulfillment_type ?? 'delivery',
-      fulfillment_type: orderRaw.fulfillmentType ?? orderRaw.fulfillment_type ?? 'delivery',
+      fulfillmentType: isPickupFulfillment
+        ? 'pickup'
+        : (orderRaw.fulfillmentType ?? orderRaw.fulfillment_type ?? 'delivery'),
+      fulfillment_type: isPickupFulfillment
+        ? 'pickup'
+        : (orderRaw.fulfillmentType ?? orderRaw.fulfillment_type ?? 'delivery'),
+      pickedUpAtStore,
     };
   }, [createLocalItemId]);
 
@@ -1402,6 +1495,8 @@ export function OrdersProvider({ children }) {
     if (!orderId) {
       throw new Error('Order ID is required');
     }
+    const existingOrder =
+      ordersRef.current.find((o) => String(o.id ?? o.orderId ?? '') === String(orderId)) || null;
     const response = await apiClient.put(`/orders/${orderId}/status`, {
       body: {
         status: 'picked_up',
@@ -1419,10 +1514,52 @@ export function OrdersProvider({ children }) {
         responseData?.message || responseData?.error || 'Failed to complete pickup'
       );
     }
-    updateOrderStatus(orderId, 'picked_up');
+
+    // Promote to Delivered so it appears in the Delivered tab like driver deliveries.
+    try {
+      const deliveredResponse = await apiClient.put(`/orders/${orderId}/status`, {
+        body: { status: ORDER_STATUS.COMPLETED },
+      });
+      if (!deliveredResponse.ok) {
+        console.warn('Pickup completed but backend did not accept delivered status');
+      }
+    } catch (deliveredError) {
+      console.warn('Failed to mark pickup order as delivered on backend:', deliveredError);
+    }
+
+    const deliveredPickupOrder = {
+      ...(existingOrder || {}),
+      id: existingOrder?.id ?? orderId,
+      orderId: existingOrder?.orderId ?? orderId,
+      status: ORDER_STATUS.COMPLETED,
+      orderStatus: ORDER_STATUS.COMPLETED,
+      backendStatus: ORDER_STATUS.COMPLETED,
+      fulfillmentType: 'pickup',
+      fulfillment_type: 'pickup',
+      pickedUpAtStore: true,
+    };
+    dispatch({ type: ACTIONS.ADD_ORDER, payload: deliveredPickupOrder });
     try {
       const orders = await fetchOrdersFromDB();
-      applyOrdersSnapshot(orders);
+      const orderKey = String(orderId);
+      const fromApi = orders.find(
+        (o) => String(o.id ?? o.orderId ?? '') === orderKey
+      );
+      if (!fromApi) {
+        applyOrdersSnapshot([deliveredPickupOrder, ...orders]);
+      } else {
+        applyOrdersSnapshot(
+          orders.map((o) =>
+            String(o.id ?? o.orderId ?? '') === orderKey
+              ? {
+                  ...o,
+                  ...deliveredPickupOrder,
+                  items: o.items?.length ? o.items : deliveredPickupOrder.items,
+                }
+              : o
+          )
+        );
+      }
     } catch (fetchError) {
       console.warn('Failed to refresh orders after pickup completion:', fetchError);
     }

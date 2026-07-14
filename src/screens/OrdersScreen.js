@@ -78,10 +78,12 @@ const OrdersScreen = ({ route, navigation }) => {
   }, [orders, alertedCancelledOrders]); // Runs whenever orders change
 
   const safeOrders = Array.isArray(orders) ? orders : [];
-  // Normalize status for filtering
+  // Normalize status for filtering (keep in sync with OrdersContext canonicalize aliases)
   const normalizeStatus = (status) => {
     if (!status) return '';
-    return String(status).toLowerCase();
+    const s = String(status).toLowerCase();
+    if (s === 'pickedup' || s === 'picked_up' || s === 'completed') return 'delivered';
+    return s;
   };
 
   const isAcceptedTabStatus = (o) => {

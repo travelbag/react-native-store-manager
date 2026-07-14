@@ -12,7 +12,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useOrders, ORDER_STATUS, ITEM_STATUS, isPickupFulfillmentOrder } from '../context/OrdersContext';
+import { useOrders, ORDER_STATUS, ITEM_STATUS, isPickupFulfillmentOrder, isPickupCompletedOrder } from '../context/OrdersContext';
 import { useNavigation } from '@react-navigation/native';
 
 const OrderCard = ({ order, hideStatusBadge = false }) => {
@@ -49,6 +49,7 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
   ).trim();
   const packageRack = orderRackFromServer;
   const isPickupOrder = isPickupFulfillmentOrder(order);
+  const showPickedUpAtStoreHighlight = isPickupCompletedOrder(order);
 
   const isPrintItem = (item) => {
     const rawType = String(item?.item_type || item?.type || '').toLowerCase();
@@ -118,6 +119,8 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
         return 'Assigned';
       case 'completed':
       case 'delivered':
+      case 'picked_up':
+      case 'pickedup':
         return 'Delivered';
       case 'rejected':
         return 'Rejected';
@@ -660,11 +663,22 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
           <Text style={styles.customerName}>{customerName}</Text>
           <Text style={styles.time}>{formatDateTime(timestamp)}</Text>
         </View>
-        {!hideStatusBadge || packageRack ? (
+        {!hideStatusBadge || packageRack || showPickedUpAtStoreHighlight ? (
           <View style={styles.statusContainer}>
-            {!hideStatusBadge ? (
-              <View style={[styles.statusBadge, { backgroundColor: getStatusColor(status) }]}>
-                <Text style={styles.statusText}>{getStatusText(status)}</Text>
+            {!hideStatusBadge || showPickedUpAtStoreHighlight ? (
+              <View
+                style={[
+                  styles.statusBadge,
+                  {
+                    backgroundColor: getStatusColor(
+                      showPickedUpAtStoreHighlight ? ORDER_STATUS.COMPLETED : status
+                    ),
+                  },
+                ]}
+              >
+                <Text style={styles.statusText}>
+                  {showPickedUpAtStoreHighlight ? 'Delivered' : getStatusText(status)}
+                </Text>
               </View>
             ) : null}
             {packageRack ? (
@@ -676,6 +690,12 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
           </View>
         ) : null}
       </View>
+      {showPickedUpAtStoreHighlight ? (
+        <View style={styles.pickedUpAtStoreBanner}>
+          <Ionicons name="storefront-outline" size={16} color="#065F46" />
+          <Text style={styles.pickedUpAtStoreBannerText}>Picked up at store</Text>
+        </View>
+      ) : null}
         <View style={styles.itemsContainer}>
           <Text style={styles.itemsTitle}>Items ({items.length})</Text>
           {items.slice(0, 3).map((item, index) => (
@@ -1090,6 +1110,23 @@ const styles = StyleSheet.create({
   rackBadgeText: {
     color: '#FFFFFF',
     fontSize: 14,
+    fontWeight: '700',
+  },
+  pickedUpAtStoreBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#D1FAE5',
+    borderColor: '#6EE7B7',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 12,
+  },
+  pickedUpAtStoreBannerText: {
+    color: '#065F46',
+    fontSize: 13,
     fontWeight: '700',
   },
   compactActionsWrap: {

@@ -604,7 +604,9 @@ const OrderPicking = ({ route, navigation }) => {
     try {
       setIsCompletingPickup(true);
       await markOrderPickedUp(targetOrderId, otp);
-      Alert.alert('Pickup complete', 'Order marked as picked up.', [{ text: 'OK' }]);
+      Alert.alert('Pickup complete', 'Order marked as Delivered (picked up at store).', [
+        { text: 'OK' },
+      ]);
       navigation.navigate('OrdersList', { selectedTab: ORDER_STATUS.COMPLETED });
     } catch (error) {
       const message = error?.message || 'Failed to complete pickup.';
