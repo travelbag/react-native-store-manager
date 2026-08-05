@@ -10,8 +10,10 @@
       "icon": "./assets/icon.png",
       "supportsTablet": true,
       "buildNumber": "47",
-       "infoPlist": {
-        "UIBackgroundModes": ["remote-notification"],
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "remote-notification"
+        ],
         "ITSAppUsesNonExemptEncryption": false,
         "NSCalendarsUsageDescription": "This app needs access to your calendar to manage events.",
         "NSCameraUsageDescription": "This app requires camera access to scan store QR codes and capture photos/videos.",
@@ -23,7 +25,7 @@
       "bundleIdentifier": "com.littlekart1.reactnativestoremanager"
     },
     "android": {
-      "versionCode": 16,
+      "versionCode": 17,
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#ffffff"
@@ -44,6 +46,16 @@
         {
           "icon": "./assets/icon.png",
           "color": "#ffffff"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "compileSdkVersion": 36,
+            "targetSdkVersion": 36,
+            "buildToolsVersion": "36.0.0"
+          }
         }
       ]
     ],

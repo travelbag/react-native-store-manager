@@ -1,5 +1,9 @@
 import { lookupInventoryByBarcode } from '../services/InventoryService';
-import { getItemExpiryValue, isInventoryExpired } from './inventoryExpiry';
+import {
+  getInventoryExpiryAlert,
+  getItemExpiryValue,
+  isInventoryExpired,
+} from './inventoryExpiry';
 
 /**
  * Resolve live inventory expiry for a pick scan.
@@ -17,6 +21,15 @@ export async function resolvePickExpiryState({ storeId, barcode, item }) {
     console.warn('⚠️ Inventory expiry lookup failed:', error?.message || error);
   }
 
+  if (__DEV__) {
+    console.log('[expiry-check]', {
+      storeId,
+      barcode: bc,
+      inventoryExpiry: inventory?.expiry_date ?? inventory?.expiryDate ?? null,
+      itemExpiry: getItemExpiryValue(item) || null,
+    });
+  }
+
   const expiryValue =
     inventory?.expiry_date ||
     inventory?.expiryDate ||
@@ -29,8 +42,12 @@ export async function resolvePickExpiryState({ storeId, barcode, item }) {
     item?.inventoryId ??
     null;
 
+  const alert = getInventoryExpiryAlert(expiryValue);
+
   return {
-    isExpired: isInventoryExpired(expiryValue),
+    isExpired: isInventoryExpired(expiryValue) || alert?.status === 'expired',
+    isExpiringSoon: alert?.status === 'expiring_soon',
+    alert,
     expiryValue: expiryValue || null,
     inventoryId,
     inventory,

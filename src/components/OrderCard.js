@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Alert,
   Image,
   Linking,
   Modal,
@@ -13,6 +12,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useOrders, ORDER_STATUS, ITEM_STATUS, isPickupFulfillmentOrder, isPickupCompletedOrder } from '../context/OrdersContext';
+import { showAppDialog } from '../context/DialogContext';
 import { useNavigation } from '@react-navigation/native';
 
 const OrderCard = ({ order, hideStatusBadge = false }) => {
@@ -143,7 +143,12 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
     //console.log('OrderCard handleStartPicking orderId:', orderId, 'order:', order);
     if (!orderId) {
       console.warn('OrderCard: Cannot start picking, orderId is missing!', order);
-      Alert.alert('Error', 'Order ID is missing. Cannot start picking for this order.');
+      showAppDialog(
+        "Can't start picking",
+        'This order is missing its ID, so picking cannot be started.',
+        undefined,
+        { variant: 'error' }
+      );
       return;
     }
     navigation.navigate('OrderPicking', { orderId });
@@ -159,10 +164,11 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
         response: result,
       });
       if (isPickupOrder) {
-        Alert.alert(
+        showAppDialog(
           'Pickup order ready',
-          'Customer has been notified by SMS with the pickup OTP.',
-          [{ text: 'OK' }]
+          'The customer has been notified by SMS with the pickup OTP.',
+          [{ text: 'OK' }],
+          { variant: 'success', icon: 'bag-check' }
         );
         if (typeof refreshOrders === 'function') {
           await refreshOrders(null, { force: true });
@@ -175,9 +181,11 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
       }
       const readyNotificationReason = String(result?.readyNotification?.reason || '').toLowerCase();
       if (readyNotificationReason === 'no_checked_in_available_drivers') {
-        Alert.alert(
+        showAppDialog(
           'No drivers available',
-          "No checked-in drivers are available right now. Please try again shortly."
+          'No checked-in drivers are available right now. Please try again shortly.',
+          undefined,
+          { variant: 'warning', icon: 'car-outline' }
         );
       }
       const resolvedRack = String(
@@ -203,7 +211,7 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
       if (isNoDriverError) {
         setNoDriverVisible(true);
       } else {
-        Alert.alert('Error', message);
+        showAppDialog("Couldn't mark ready", message, undefined, { variant: 'error' });
       }
     } finally {
       setIsAssigningDriver(false);
@@ -227,10 +235,18 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
       if (supported) {
         await Linking.openURL(url);
       } else {
-        Alert.alert('Not supported', 'Phone calls are not supported on this device.');
+        showAppDialog(
+          'Calls not supported',
+          'Phone calls are not supported on this device.',
+          undefined,
+          { variant: 'warning', icon: 'call-outline' }
+        );
       }
     } catch (e) {
-      Alert.alert('Error', 'Unable to initiate the call.');
+      showAppDialog('Call failed', 'Unable to start the call. Please try again.', undefined, {
+        variant: 'error',
+        icon: 'call-outline',
+      });
     }
   };
 

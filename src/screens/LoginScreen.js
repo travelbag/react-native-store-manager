@@ -5,7 +5,6 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  Alert,
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
@@ -14,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
+import { showAppDialog } from '../context/DialogContext';
 
 const LoginScreen = ({ navigation }) => {
   const [username, setUsername] = useState(__DEV__ ? 'Store-1' : '');
@@ -25,7 +25,9 @@ const LoginScreen = ({ navigation }) => {
 
   const handleLogin = async () => {
     if (!username.trim() || !password.trim()) {
-      Alert.alert('Error', 'Please enter both username and password');
+      showAppDialog('Missing details', 'Please enter both username and password.', undefined, {
+        variant: 'warning',
+      });
       return;
     }
 
@@ -38,10 +40,12 @@ const LoginScreen = ({ navigation }) => {
         // Navigation will be handled automatically by the auth state change
         console.log('✅ Login successful:', result.manager?.name);
       } else {
-        Alert.alert('Login Failed', result.error);
+        showAppDialog('Login failed', result.error, undefined, { variant: 'error' });
       }
     } catch (error) {
-      Alert.alert('Error', 'An unexpected error occurred');
+      showAppDialog('Something went wrong', 'An unexpected error occurred. Please try again.', undefined, {
+        variant: 'error',
+      });
     } finally {
       setIsLoggingIn(false);
     }

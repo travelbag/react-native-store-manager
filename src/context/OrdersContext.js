@@ -11,6 +11,7 @@ import { API_CONFIG, buildApiUrl } from '../config/api';
 import { apiClient } from '../services/apiClient';
 import { assignDriver, wasOrderAssigned } from '../services/DriverService';
 import { resolvePrintItemUrl } from '../utils/mediaUrl';
+import { toExpiryDateOnly } from '../utils/inventoryExpiry';
 import { useAuth } from './AuthContext';
 
 const OrdersContext = createContext();
@@ -610,10 +611,9 @@ export function OrdersProvider({ children }) {
           ...existingRack,
           location: rackLocation,
         };
-        const expiryRaw = String(
-          item?.expiry_date ?? item?.expiryDate ?? item?.expiry ?? ''
-        ).trim();
-        const expiryDate = expiryRaw.length >= 10 ? expiryRaw.slice(0, 10) : expiryRaw;
+        const expiryDate = toExpiryDateOnly(
+          item?.expiry_date ?? item?.expiryDate ?? item?.expiry
+        );
         const inventoryId =
           item?.inventory_id ?? item?.inventoryId ?? item?.inventoryID ?? null;
 

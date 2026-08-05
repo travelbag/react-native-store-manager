@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
-  Alert,
   TextInput,
   Keyboard,
   Vibration,
@@ -33,7 +32,11 @@ import { useHardwareBarcodeWedge } from '../hooks/useHardwareBarcodeWedge';
 import { downloadMediaToLocal, isImageMediaUrl, resolvePrintItemUrl } from '../utils/mediaUrl';
 import { useAuth } from '../context/AuthContext';
 import ExpiredProductModal from '../components/ExpiredProductModal';
+import ItemExpiryBadge from '../components/ItemExpiryBadge';
 import { resolvePickExpiryState } from '../utils/resolvePickExpiry';
+import { getItemExpiryValue, getInventoryExpiryAlert } from '../utils/inventoryExpiry';
+import { confirmAppDialog, showAppDialog } from '../context/DialogContext';
+import { confirmExpiringSoonPick } from '../utils/expiryDialog';
 
 const sameOrderId = (o, routeOrderId) =>
   String(o?.id ?? o?.orderId ?? '').trim() === String(routeOrderId ?? '').trim();
@@ -112,10 +115,15 @@ const OrderPicking = ({ route, navigation }) => {
         const list = Array.isArray(latest) ? latest : [];
         const currentOrder = list.find((o) => sameOrderId(o, orderId));
         if (currentOrder && String(currentOrder.status || currentOrder.orderStatus || '').toLowerCase() === 'cancelled') {
-          Alert.alert(
-            'Order Cancelled',
-            `Order #${orderId} has been cancelled.`,
-            [{ text: 'OK', onPress: () => navigation.goBack() }] // Navigate back to stop picking
+          showAppDialog(
+            'Order cancelled',
+            'This order was cancelled, so picking has been stopped.',
+            [{ text: 'OK', onPress: () => navigation.goBack() }],
+            {
+              variant: 'warning',
+              cancelable: false,
+              details: [{ label: 'Order', value: `#${orderId}`, icon: 'receipt-outline' }],
+            }
           );
         }
       };
@@ -178,16 +186,28 @@ const OrderPicking = ({ route, navigation }) => {
     );
 
     if (allItemsProcessed && list.length > 0) {
-      Alert.alert(
-        'All Items Processed! ✅',
-        'All items have been picked or marked unavailable. You can now mark this order as READY.',
-        [{ text: 'OK' }]
+      showAppDialog(
+        'All items processed',
+        'Every item has been picked or marked unavailable. You can now mark this order as ready.',
+        [{ text: 'OK' }],
+        { variant: 'success', icon: 'checkmark-done-circle' }
       );
     }
   }, []);
 
-  const storeIdForPick =
-    manager?.storeId || manager?.store_id || order?.storeId || order?.store_id || null;
+  // Inventory lookup needs the numeric store id; managers can carry codes like "store-4".
+  const storeIdForPick = React.useMemo(() => {
+    const candidates = [
+      manager?.storeId,
+      manager?.store_id,
+      order?.storeId,
+      order?.store_id,
+    ];
+    const numeric = candidates.find((value) =>
+      /^\d+$/.test(String(value ?? '').replace(/^store[-_]?/i, '').trim())
+    );
+    return numeric ?? candidates.find((value) => value) ?? null;
+  }, [manager?.storeId, manager?.store_id, order?.storeId, order?.store_id]);
 
   const promptIfExpired = useCallback((payload) => {
     return new Promise((resolve) => {
@@ -200,6 +220,16 @@ const OrderPicking = ({ route, navigation }) => {
     });
   }, []);
 
+  const promptExpiringSoon = useCallback(
+    (payload) =>
+      confirmExpiringSoonPick({
+        productName: payload.productName,
+        expiryValue: payload.expiryValue,
+        alert: payload.alert,
+      }),
+    []
+  );
+
   const ensureProductNotExpiredForPick = useCallback(
     async (item, barcode) => {
       const expiryState = await resolvePickExpiryState({
@@ -207,17 +237,30 @@ const OrderPicking = ({ route, navigation }) => {
         barcode,
         item,
       });
-      if (!expiryState.isExpired) return true;
 
-      Vibration.vibrate([0, 120, 80, 120]);
-      const allowed = await promptIfExpired({
-        productName: item?.name || item?.productName || barcode,
-        expiryValue: expiryState.expiryValue,
-        inventoryId: expiryState.inventoryId,
-      });
-      return Boolean(allowed);
+      if (expiryState.isExpired) {
+        Vibration.vibrate([0, 120, 80, 120]);
+        const allowed = await promptIfExpired({
+          productName: item?.name || item?.productName || barcode,
+          expiryValue: expiryState.expiryValue,
+          inventoryId: expiryState.inventoryId,
+        });
+        return Boolean(allowed);
+      }
+
+      if (expiryState.isExpiringSoon && expiryState.alert) {
+        Vibration.vibrate([0, 80, 60, 80]);
+        const allowed = await promptExpiringSoon({
+          productName: item?.name || item?.productName || barcode,
+          expiryValue: expiryState.expiryValue,
+          alert: expiryState.alert,
+        });
+        return Boolean(allowed);
+      }
+
+      return true;
     },
-    [promptIfExpired, storeIdForPick]
+    [promptIfExpired, promptExpiringSoon, storeIdForPick]
   );
 
   const handleWedgeBarcode = useCallback(
@@ -252,7 +295,16 @@ const OrderPicking = ({ route, navigation }) => {
       });
 
       if (candidates.length === 0) {
-        Alert.alert('No match', `No open line uses barcode "${data}".`);
+        showAppDialog(
+          'No matching item',
+          'No open line in this order uses the scanned barcode.',
+          undefined,
+          {
+            variant: 'warning',
+            icon: 'barcode-outline',
+            details: [{ label: 'Scanned', value: data, icon: 'scan-outline' }],
+          }
+        );
         return;
       }
 
@@ -338,44 +390,23 @@ const OrderPicking = ({ route, navigation }) => {
       const cancelledOrderId = String(payload?.orderId || '').trim();
       if (!cancelledOrderId || cancelledOrderId !== currentOrderId) return;
 
-      const reasonText = payload?.reason ? `\nReason: ${payload.reason}` : '';
-      Alert.alert(
-        'Order Cancelled',
-        `Order cancelled. Stop packing for this order immediately.${reasonText}`,
+      showAppDialog(
+        'Order cancelled',
+        'Stop packing this order immediately.',
         [
           {
             text: 'OK',
             onPress: () => navigation.navigate('OrdersList', { selectedTab: ORDER_STATUS.ACCEPTED }),
           },
         ],
-        { cancelable: false }
-      );
-    });
-
-    return () => {
-      cancellationListener.remove();
-    };
-  }, [navigation, order?.id, order?.orderId, orderId]);
-
-  useEffect(() => {
-    const currentOrderId = String(order?.id || order?.orderId || orderId || '').trim();
-    if (!currentOrderId) return undefined;
-
-    const cancellationListener = DeviceEventEmitter.addListener('orderCancelled', (payload = {}) => {
-      const cancelledOrderId = String(payload?.orderId || '').trim();
-      if (!cancelledOrderId || cancelledOrderId !== currentOrderId) return;
-
-      const reasonText = payload?.reason ? `\nReason: ${payload.reason}` : '';
-      Alert.alert(
-        'Order Cancelled',
-        `Order cancelled. Stop packing for this order immediately.${reasonText}`,
-        [
-          {
-            text: 'OK',
-            onPress: () => navigation.navigate('OrdersList', { selectedTab: ORDER_STATUS.ACCEPTED }),
-          },
-        ],
-        { cancelable: false }
+        {
+          variant: 'error',
+          icon: 'close-circle',
+          cancelable: false,
+          details: payload?.reason
+            ? [{ label: 'Reason', value: payload.reason, icon: 'information-circle-outline' }]
+            : undefined,
+        }
       );
     });
 
@@ -503,7 +534,10 @@ const OrderPicking = ({ route, navigation }) => {
   const handlePrintItem = async (item) => {
     const url = getPrintFileUrl(item);
     if (!url) {
-      Alert.alert('Print failed', 'No file URL found for this item.');
+      showAppDialog('Print failed', 'No file was found for this item.', undefined, {
+        variant: 'error',
+        icon: 'print-outline',
+      });
       return;
     }
     setIsPrinting(true);
@@ -513,7 +547,10 @@ const OrderPicking = ({ route, navigation }) => {
       await Print.printAsync({ uri: localUri });
       await markPrintDone(item);
     } catch (e) {
-      Alert.alert('Print failed', e?.message || 'Unable to print this file.');
+      showAppDialog('Print failed', e?.message || 'Unable to print this file.', undefined, {
+        variant: 'error',
+        icon: 'print-outline',
+      });
     } finally {
       setIsPrinting(false);
     }
@@ -522,7 +559,10 @@ const OrderPicking = ({ route, navigation }) => {
   const handleDownloadItem = async (item, fromPreview = false) => {
     const url = getPrintFileUrl(item);
     if (!url) {
-      Alert.alert('Download failed', 'No file URL found for this item.');
+      showAppDialog('Download failed', 'No file was found for this item.', undefined, {
+        variant: 'error',
+        icon: 'cloud-download-outline',
+      });
       return;
     }
     setDownloadingItemId(item?.id ?? null);
@@ -535,16 +575,20 @@ const OrderPicking = ({ route, navigation }) => {
       if (fromPreview) {
         closePrintPreview();
       }
-      Alert.alert(
-        'Downloaded',
-        'File downloaded. Mark this item as printed?',
+      showAppDialog(
+        'File downloaded',
+        'The file was downloaded. Mark this item as printed?',
         [
           { text: 'Not yet', style: 'cancel' },
           { text: 'Mark Printed', onPress: () => markPrintDone(item) },
-        ]
+        ],
+        { variant: 'success', icon: 'cloud-done-outline' }
       );
     } catch (e) {
-      Alert.alert('Download failed', e?.message || 'Unable to download this file.');
+      showAppDialog('Download failed', e?.message || 'Unable to download this file.', undefined, {
+        variant: 'error',
+        icon: 'cloud-download-outline',
+      });
     } finally {
       setIsDownloading(false);
       setDownloadingItemId(null);
@@ -564,10 +608,16 @@ const OrderPicking = ({ route, navigation }) => {
       if (canOpen) {
         await Linking.openURL(resolvedUrl);
       } else {
-        Alert.alert('Preview not available', 'Unable to open this file.');
+        showAppDialog('Preview not available', 'Unable to open this file.', undefined, {
+          variant: 'warning',
+          icon: 'eye-off-outline',
+        });
       }
     } catch (e) {
-      Alert.alert('Preview failed', e?.message || 'Unable to open this file.');
+      showAppDialog('Preview failed', e?.message || 'Unable to open this file.', undefined, {
+        variant: 'error',
+        icon: 'eye-off-outline',
+      });
     }
   };
 
@@ -597,18 +647,20 @@ const OrderPicking = ({ route, navigation }) => {
       setIsAssigningDriver(true);
       const result = await markOrderReady(targetOrderId);
       if (isPickupOrder) {
-        Alert.alert(
+        showAppDialog(
           'Pickup order ready',
-          'Customer has been notified by SMS with the pickup OTP.',
-          [{ text: 'OK' }]
+          'The customer has been notified by SMS with the pickup OTP.',
+          [{ text: 'OK' }],
+          { variant: 'success', icon: 'bag-check' }
         );
       } else {
         const readyNotificationReason = String(result?.readyNotification?.reason || '').toLowerCase();
         if (readyNotificationReason === 'no_checked_in_available_drivers') {
-          Alert.alert(
+          showAppDialog(
             'No drivers available',
-            "No checked-in drivers are available right now. Please try again shortly.",
-            [{ text: 'OK' }]
+            'No checked-in drivers are available right now. Please try again shortly.',
+            [{ text: 'OK' }],
+            { variant: 'warning', icon: 'car-outline' }
           );
         }
       }
@@ -635,13 +687,14 @@ const OrderPicking = ({ route, navigation }) => {
         normalizedMessage.includes('driver at max active limit') ||
         normalizedMessage.includes('availability changed');
       if (isNoDriverError) {
-        Alert.alert(
+        showAppDialog(
           'No drivers available',
           "Couldn't find an available driver right now. Please try again shortly.",
-          [{ text: 'OK' }]
+          [{ text: 'OK' }],
+          { variant: 'warning', icon: 'car-outline' }
         );
       } else {
-        Alert.alert('Error', msg, [{ text: 'OK' }]);
+        showAppDialog("Couldn't mark ready", msg, [{ text: 'OK' }], { variant: 'error' });
       }
     } finally {
       setIsAssigningDriver(false);
@@ -652,23 +705,34 @@ const OrderPicking = ({ route, navigation }) => {
     const targetOrderId = order.id || order.orderId || orderId;
     const otp = String(pickupOtpInput || '').trim();
     if (!/^\d{4}$/.test(otp)) {
-      Alert.alert('Invalid OTP', 'Enter pickup SMS OTP or Delivery OTP from the customer app.');
+      showAppDialog(
+        'Invalid OTP',
+        'Enter the 4-digit pickup OTP from the customer’s SMS or the delivery OTP from their app.',
+        undefined,
+        { variant: 'warning', icon: 'keypad-outline' }
+      );
       return;
     }
     try {
       setIsCompletingPickup(true);
       await markOrderPickedUp(targetOrderId, otp);
-      Alert.alert('Pickup complete', 'Order marked as Delivered (picked up at store).', [
-        { text: 'OK' },
-      ]);
+      await showAppDialog('Pickup complete', 'This order is now marked as delivered.', [{ text: 'OK' }], {
+        variant: 'success',
+        icon: 'bag-check',
+        highlight: {
+          icon: 'storefront-outline',
+          label: 'Fulfilment',
+          value: 'Picked up at store',
+        },
+      });
       navigation.navigate('OrdersList', { selectedTab: ORDER_STATUS.COMPLETED });
     } catch (error) {
       const message = error?.message || 'Failed to complete pickup.';
       const isExpired = String(message).toLowerCase().includes('expired');
-      Alert.alert(
-        isExpired ? 'OTP expired' : 'Error',
-        message,
-      );
+      showAppDialog(isExpired ? 'OTP expired' : "Couldn't complete pickup", message, undefined, {
+        variant: 'error',
+        icon: isExpired ? 'time-outline' : 'alert-circle',
+      });
     } finally {
       setIsCompletingPickup(false);
     }
@@ -714,36 +778,44 @@ const OrderPicking = ({ route, navigation }) => {
         item?.rackNumber ||
         ''
     ).trim();
-    Alert.alert(
-      'Navigate to Item',
-      `📍 ${item.name}\n\n🧭 Rack: ${rackLabel || '—'}\n📍 Aisle: ${rack.aisle || '—'}\n📝 Description: ${rack.description || '—'}`,
+    showAppDialog(
+      'Find this item',
+      item.name,
       [
-        { text: 'Got it!', style: 'default' },
-        { 
-          text: 'Scan Item', 
-          style: 'default',
-          onPress: () => handleScanItem(item)
+        { text: 'Got it', style: 'cancel' },
+        { text: 'Scan Item', onPress: () => handleScanItem(item) },
+      ],
+      {
+        variant: 'info',
+        icon: 'navigate',
+        highlight: {
+          icon: 'grid-outline',
+          label: 'Rack',
+          value: rackLabel || 'Not set',
         },
-      ]
+        details: [
+          { label: 'Aisle', value: rack.aisle || '—', icon: 'git-branch-outline' },
+          rack.description
+            ? { label: 'Notes', value: rack.description, icon: 'document-text-outline' }
+            : null,
+        ].filter(Boolean),
+      }
     );
   };
 
-  const handleMarkUnavailable = (item) => {
-    Alert.alert(
-      'Mark Item Unavailable',
-      `Mark "${item.name}" as unavailable?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Mark Unavailable', 
-          style: 'destructive',
-          onPress: () => {
-            markItemUnavailable(orderId, item.id);
-            setTimeout(checkOrderCompletion, 100);
-          }
-        },
-      ]
-    );
+  const handleMarkUnavailable = async (item) => {
+    const confirmed = await confirmAppDialog({
+      title: 'Mark item unavailable',
+      message: 'This tells the customer the item is out of stock and cannot be picked.',
+      confirmText: 'Mark Unavailable',
+      destructive: true,
+      icon: 'remove-circle',
+      details: [{ label: 'Item', value: item.name, icon: 'cube-outline' }],
+    });
+    if (!confirmed) return;
+
+    markItemUnavailable(orderId, item.id);
+    setTimeout(checkOrderCompletion, 100);
   };
 
   const handleScanItem = (item, options = {}) => {
@@ -775,6 +847,30 @@ const OrderPicking = ({ route, navigation }) => {
         setTimeout(checkOrderCompletion, 100);
       },
     });
+  };
+
+  const renderItemExpiryLine = (item) => {
+    if (isPrintItem(item)) return null;
+    return <ItemExpiryBadge item={item} />;
+  };
+
+  const renderItemExpiryDetailLine = (item) => {
+    if (isPrintItem(item)) return null;
+    const expiryValue = getItemExpiryValue(item);
+    const alert = getInventoryExpiryAlert(expiryValue);
+    if (!alert) return null;
+    return (
+      <Text
+        style={
+          alert.status === 'expired'
+            ? styles.pickingDetailExpiryExpired
+            : styles.pickingDetailExpirySoon
+        }
+      >
+        Expiry: {alert.label}
+        {expiryValue ? ` (${String(expiryValue).slice(0, 10)})` : ''}
+      </Text>
+    );
   };
 
   const renderItemCard = ({ item }) => {
@@ -858,6 +954,7 @@ const OrderPicking = ({ route, navigation }) => {
                   Qty: {quantity} × ${price} = ${(quantity * price).toFixed(2)}
                 </Text>
                 {barcodeValue ? <Text style={styles.barcode}>Barcode: {barcodeValue}</Text> : null}
+                {renderItemExpiryLine(item)}
               </>
             )}
           </View>
@@ -1145,6 +1242,7 @@ const OrderPicking = ({ route, navigation }) => {
                     {pickingDetailItem.rack?.description ? (
                       <Text style={styles.pickingDetailLine}>{pickingDetailItem.rack.description}</Text>
                     ) : null}
+                    {renderItemExpiryDetailLine(pickingDetailItem)}
                   </>
                 )}
                 {pickingDetailItem.scannedAt ? (
@@ -1462,6 +1560,20 @@ const styles = StyleSheet.create({
   pickingDetailLine: {
     fontSize: 14,
     color: '#333',
+    marginBottom: 8,
+    lineHeight: 20,
+  },
+  pickingDetailExpiryExpired: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#B91C1C',
+    marginBottom: 8,
+    lineHeight: 20,
+  },
+  pickingDetailExpirySoon: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#B45309',
     marginBottom: 8,
     lineHeight: 20,
   },

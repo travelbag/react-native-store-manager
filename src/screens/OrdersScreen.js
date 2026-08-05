@@ -6,13 +6,13 @@ import {
   FlatList,
   TouchableOpacity,
   RefreshControl,
-  Alert,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useOrders, ORDER_STATUS, isPickupFulfillmentOrder, isPickupReadyOrder, isPickupCompletedOrder } from '../context/OrdersContext';
 import { useAuth } from '../context/AuthContext';
 import OrderCard from '../components/OrderCard';
+import { showAppDialog } from '../context/DialogContext';
 import { useFocusEffect } from '@react-navigation/native';
 import { AppState } from 'react-native';
 
@@ -67,10 +67,14 @@ const OrdersScreen = ({ route, navigation }) => {
     // Show alert for each qualifying cancelled order (only once)
     cancelledOrders.forEach(order => {
       const orderId = order?.id || order?.orderId;
-      Alert.alert(
-        'Order Cancelled',
-        `Order #${orderId} has been cancelled.`,
-        [{ text: 'OK' }]
+      showAppDialog(
+        'Order cancelled',
+        'This order was cancelled by the customer.',
+        [{ text: 'OK' }],
+        {
+          variant: 'warning',
+          details: [{ label: 'Order', value: `#${orderId}`, icon: 'receipt-outline' }],
+        }
       );
       // Mark as alerted to prevent future duplicates
       setAlertedCancelledOrders(prev => new Set(prev).add(orderId));

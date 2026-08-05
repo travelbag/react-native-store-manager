@@ -10,11 +10,19 @@ const readJson = async (response) => {
   }
 };
 
+/** Backend expects a numeric store id; managers may carry ids like "store-4". */
+const normalizeStoreIdForApi = (storeId) => {
+  const raw = String(storeId ?? '').trim();
+  if (!raw) return '';
+  const digits = raw.replace(/^store[-_]?/i, '').trim();
+  return /^\d+$/.test(digits) ? digits : '';
+};
+
 /**
  * Live inventory row for a store barcode (includes expiry_date + id).
  */
 export const lookupInventoryByBarcode = async (storeId, barcode) => {
-  const sid = String(storeId ?? '').trim();
+  const sid = normalizeStoreIdForApi(storeId);
   const bc = String(barcode ?? '').trim();
   if (!sid || !bc) return null;
 

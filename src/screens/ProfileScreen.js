@@ -1,28 +1,25 @@
 import React from "react";
-import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
+import { confirmAppDialog, showAppDialog } from "../context/DialogContext";
 import { apiClient } from "../services/apiClient";
 
 const ProfileScreen = ({ navigation }) => {
   const { manager, logout } = useAuth();
 
-  const handleSignOut = () => {
-    Alert.alert(
-      'Sign Out',
-      'Are you sure you want to sign out?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Sign Out', 
-          style: 'destructive',
-          onPress: async () => {
-            await removePushTokenOnLogout(manager?.id, manager?.storeId, manager?.pushToken);
-            await logout();
-          },
-        },
-      ]
-    );
+  const handleSignOut = async () => {
+    const confirmed = await confirmAppDialog({
+      title: 'Sign out',
+      message: 'You will need your username and password to sign back in.',
+      confirmText: 'Sign Out',
+      destructive: true,
+      icon: 'log-out-outline',
+    });
+    if (!confirmed) return;
+
+    await removePushTokenOnLogout(manager?.id, manager?.storeId, manager?.pushToken);
+    await logout();
   };
 
   async function removePushTokenOnLogout(storeManagerId, storeId, pushToken) {
@@ -45,36 +42,38 @@ const ProfileScreen = ({ navigation }) => {
     }
   }
 
-  const handleDeleteAccount = () => {
-    Alert.alert(
-      "Delete Account",
-      "Are you sure? This action cannot be undone.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              const res = await apiClient.post("/store-managers/deleteaccount", {
-                body: { managerId: manager.id },
-              });
+  const handleDeleteAccount = async () => {
+    const confirmed = await confirmAppDialog({
+      title: "Delete account",
+      message: "This permanently removes your store manager account. This action cannot be undone.",
+      confirmText: "Delete",
+      destructive: true,
+      icon: "trash-outline",
+    });
+    if (!confirmed) return;
 
-              const data = await res.json();
+    try {
+      const res = await apiClient.post("/store-managers/deleteaccount", {
+        body: { managerId: manager.id },
+      });
 
-              if (res.ok) {
-                Alert.alert("Account Deleted", "Your account has been removed.");
-                logout();
-              } else {
-                Alert.alert("Error", data.message || "Failed to delete account.");
-              }
-            } catch (error) {
-              Alert.alert("Error", "Something went wrong.");
-            }
-          },
-        },
-      ]
-    );
+      const data = await res.json();
+
+      if (res.ok) {
+        await showAppDialog("Account deleted", "Your account has been removed.", undefined, {
+          variant: "success",
+        });
+        logout();
+      } else {
+        showAppDialog("Delete failed", data.message || "Failed to delete account.", undefined, {
+          variant: "error",
+        });
+      }
+    } catch (error) {
+      showAppDialog("Something went wrong", "Please check your connection and try again.", undefined, {
+        variant: "error",
+      });
+    }
   };
 
   return (

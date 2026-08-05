@@ -4,16 +4,20 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Alert,
   Vibration,
   TextInput,
   Keyboard,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useHardwareBarcodeWedge } from '../hooks/useHardwareBarcodeWedge';
+import ExpiredProductModal from '../components/ExpiredProductModal';
+import { resolvePickExpiryState } from '../utils/resolvePickExpiry';
+import { showAppDialog } from '../context/DialogContext';
+import { confirmExpiringSoonPick } from '../utils/expiryDialog';
 
 const BarcodeScannerScreen = ({ route, navigation }) => {
   const {
@@ -23,20 +27,26 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
     itemName,
     requiredQuantity = 1,
     scanWithCamera = false,
+    storeId = null,
+    inventoryId: inventoryIdParam = null,
+    expiryDate: expiryDateParam = null,
   } = route.params || {};
   const [scanned, setScanned] = useState(false);
   const [pickedQuantity, setPickedQuantity] = useState(1);
   const [showQuantitySelector, setShowQuantitySelector] = useState(false);
   const [wedgeResume, setWedgeResume] = useState(0);
+  const [checkingExpiry, setCheckingExpiry] = useState(false);
+  const [expiredGate, setExpiredGate] = useState(null);
   const cameraRef = useRef(null);
   const scanLockRef = useRef(false);
   const successAlertOpenRef = useRef(false);
   const handleScannedValueRef = useRef(() => {});
+  const pendingConfirmRef = useRef(null);
 
   // camera permissions (must run before wedge hook so `permission` is defined)
   const [permission, requestPermission] = useCameraPermissions();
 
-  const wedgeEnabled = permission != null && !scanned;
+  const wedgeEnabled = permission != null && !scanned && !checkingExpiry && !expiredGate;
 
   const { hardwareInputProps, focusCapture } = useHardwareBarcodeWedge({
     onBarcode: (data) => handleScannedValueRef.current(data),
@@ -47,6 +57,9 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
   const resetScanner = () => {
     scanLockRef.current = false;
     successAlertOpenRef.current = false;
+    pendingConfirmRef.current = null;
+    setCheckingExpiry(false);
+    setExpiredGate(null);
     setScanned(false);
     setPickedQuantity(1);
     setShowQuantitySelector(false);
@@ -65,42 +78,72 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
     }
   }, [scanWithCamera, permission, requestPermission]);
 
-  const handleScannedValue = (rawData) => {
-    if (scanLockRef.current || successAlertOpenRef.current) {
-      return;
-    }
-    const data = String(rawData || '').trim();
-    if (!data) {
-      return;
-    }
+  const promptExpiringSoon = useCallback(
+    (payload) =>
+      confirmExpiringSoonPick({
+        productName: payload.productName || itemName,
+        expiryValue: payload.expiryValue,
+        alert: payload.alert,
+      }),
+    [itemName]
+  );
 
-    scanLockRef.current = true;
-    setScanned(true);
-    Vibration.vibrate();
+  const promptIfExpired = useCallback((payload) => {
+    return new Promise((resolve) => {
+      setExpiredGate({
+        productName: payload.productName,
+        expiryValue: payload.expiryValue,
+        inventoryId: payload.inventoryId,
+        resolve,
+      });
+    });
+  }, []);
 
-    if (data === expectedBarcode) {
-      if (requiredQuantity > 1) {
-        setShowQuantitySelector(true);
-      } else {
-        confirmScan(1, data);
+  const ensureProductAllowedForScan = useCallback(
+    async (barcode) => {
+      const expiryState = await resolvePickExpiryState({
+        storeId,
+        barcode,
+        item: {
+          barcode: expectedBarcode,
+          name: itemName,
+          inventory_id: inventoryIdParam,
+          inventoryId: inventoryIdParam,
+          expiry_date: expiryDateParam,
+          expiryDate: expiryDateParam,
+        },
+      });
+
+      if (expiryState.isExpired) {
+        Vibration.vibrate([0, 120, 80, 120]);
+        return promptIfExpired({
+          productName: itemName || barcode,
+          expiryValue: expiryState.expiryValue,
+          inventoryId: expiryState.inventoryId || inventoryIdParam,
+        });
       }
-    } else {
-      Alert.alert(
-        'Wrong Item',
-        `❌ This barcode doesn't match ${itemName}.\n\nExpected: ${expectedBarcode}\nScanned: ${data}`,
-        [
-          { text: 'Try Again', onPress: () => resetScanner() },
-          { text: 'Cancel', onPress: () => navigation.goBack() },
-        ]
-      );
-    }
-  };
 
-  handleScannedValueRef.current = handleScannedValue;
+      if (expiryState.isExpiringSoon && expiryState.alert) {
+        Vibration.vibrate([0, 80, 60, 80]);
+        return promptExpiringSoon({
+          productName: itemName || barcode,
+          expiryValue: expiryState.expiryValue,
+          alert: expiryState.alert,
+        });
+      }
 
-  const handleBarCodeScanned = ({ data }) => {
-    handleScannedValue(data);
-  };
+      return true;
+    },
+    [
+      storeId,
+      expectedBarcode,
+      itemName,
+      inventoryIdParam,
+      expiryDateParam,
+      promptIfExpired,
+      promptExpiringSoon,
+    ]
+  );
 
   const confirmScan = (quantity, scannedData) => {
     if (successAlertOpenRef.current) {
@@ -108,9 +151,9 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
     }
 
     successAlertOpenRef.current = true;
-    Alert.alert(
-      'Success!',
-      `✅ ${itemName} scanned successfully!\nQuantity picked: ${quantity}${requiredQuantity > 1 ? ` of ${requiredQuantity}` : ''}`,
+    showAppDialog(
+      'Item scanned',
+      `${itemName} was scanned successfully.`,
       [
         {
           text: 'OK',
@@ -136,11 +179,84 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
               } else {
                 navigation.navigate('OrdersList');
               }
-            }, 200); // Delay navigation to allow alert to close
+            }, 200); // Delay navigation to allow the dialog to close
           },
         },
-      ]
+      ],
+      {
+        variant: 'success',
+        icon: 'checkmark-done',
+        cancelable: false,
+        highlight: {
+          icon: 'layers-outline',
+          label: 'Quantity picked',
+          value: requiredQuantity > 1 ? `${quantity} of ${requiredQuantity}` : String(quantity),
+        },
+      }
     );
+  };
+
+  const proceedAfterExpiryCheck = useCallback(
+    async (quantity, scannedData) => {
+      setCheckingExpiry(true);
+      try {
+        const allowed = await ensureProductAllowedForScan(scannedData || expectedBarcode);
+        if (!allowed) {
+          resetScanner();
+          return;
+        }
+        if (requiredQuantity > 1 && quantity == null) {
+          setShowQuantitySelector(true);
+          return;
+        }
+        confirmScan(quantity ?? 1, scannedData);
+      } finally {
+        setCheckingExpiry(false);
+      }
+    },
+    [ensureProductAllowedForScan, expectedBarcode, requiredQuantity]
+  );
+
+  const handleScannedValue = (rawData) => {
+    if (scanLockRef.current || successAlertOpenRef.current || checkingExpiry) {
+      return;
+    }
+    const data = String(rawData || '').trim();
+    if (!data) {
+      return;
+    }
+
+    scanLockRef.current = true;
+    setScanned(true);
+    Vibration.vibrate();
+
+    if (data === expectedBarcode) {
+      void proceedAfterExpiryCheck(requiredQuantity > 1 ? null : 1, data);
+    } else {
+      showAppDialog(
+        'Wrong item',
+        `This barcode doesn't match ${itemName}.`,
+        [
+          { text: 'Cancel', style: 'cancel', onPress: () => navigation.goBack() },
+          { text: 'Try Again', onPress: () => resetScanner() },
+        ],
+        {
+          variant: 'error',
+          icon: 'barcode-outline',
+          cancelable: false,
+          details: [
+            { label: 'Expected', value: expectedBarcode, icon: 'checkmark-circle-outline' },
+            { label: 'Scanned', value: data, icon: 'scan-outline' },
+          ],
+        }
+      );
+    }
+  };
+
+  handleScannedValueRef.current = handleScannedValue;
+
+  const handleBarCodeScanned = ({ data }) => {
+    handleScannedValue(data);
   };
 
   const increaseQuantity = () => {
@@ -178,188 +294,222 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
   return (
     <SafeAreaView style={styles.container}>
       <TextInput {...hardwareInputProps} />
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
+        </TouchableOpacity>
+        <View style={styles.headerInfo}>
+          <Text style={styles.headerTitle}>Scan Item</Text>
+          <Text style={styles.headerSubtitle}>{itemName}</Text>
+        </View>
+        <View style={{ width: 24 }} />
+      </View>
 
       {!permission.granted ? (
         <View style={styles.permissionContainer}>
           <Ionicons name={scanWithCamera ? 'camera-outline' : 'barcode-outline'} size={64} color="#666" />
-          <Text style={styles.permissionItemTitle}>{itemName}</Text>
-          {scanWithCamera ? (
-            <>
-              <Text style={styles.permissionHint}>
+          <Text style={styles.message}>
+            {scanWithCamera ? (
+              <>
                 Camera is used to scan this barcode. Allow access to continue, or go back and use the handheld scanner on the picking list instead.
-              </Text>
-              <TouchableOpacity style={styles.button} onPress={requestPermission}>
-                <Text style={styles.buttonText}>Allow camera</Text>
-              </TouchableOpacity>
-            </>
-          ) : (
-            <>
-              <Text style={styles.permissionHint}>
+              </>
+            ) : (
+              <>
                 Your handheld scanner is active here — pull the trigger to scan. You do not need the camera.
-              </Text>
-              <Text style={styles.message}>Use the phone camera only if you do not have a scanner.</Text>
-              <TouchableOpacity style={styles.button} onPress={requestPermission}>
-                <Text style={styles.buttonText}>Use phone camera</Text>
-              </TouchableOpacity>
-            </>
+              </>
+            )}
+          </Text>
+          {scanWithCamera ? (
+            <TouchableOpacity style={styles.permissionButton} onPress={requestPermission}>
+              <Text style={styles.permissionButtonText}>Allow Camera</Text>
+            </TouchableOpacity>
+          ) : (
+            <Text style={styles.message}>Use the phone camera only if you do not have a scanner.</Text>
           )}
-          <TouchableOpacity
-            style={[styles.button, styles.secondaryButton, styles.permissionCancel]}
-            onPress={() => navigation.goBack()}
-          >
-            <Text style={[styles.buttonText, styles.secondaryButtonText]}>Cancel</Text>
-          </TouchableOpacity>
         </View>
       ) : (
         <>
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
-        >
-          <Ionicons name="arrow-back" size={24} color="#007AFF" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Scan Barcode</Text>
-        <View style={styles.placeholder} />
-      </View>
+          <Text style={styles.instruction}>
+            {scanWithCamera
+              ? 'Point the camera at the barcode, or scan with your handheld scanner.'
+              : 'Use your handheld scanner, or point the camera at the barcode.'}
+          </Text>
 
-      <View style={styles.instructionContainer}>
-        <Text style={styles.instructionTitle}>Scanning for:</Text>
-        <Text style={styles.itemName}>{itemName}</Text>
-        {requiredQuantity > 1 && (
-          <Text style={styles.quantityText}>Required: {requiredQuantity} items</Text>
-        )}
-        <Text style={styles.instructionText}>
-          {scanWithCamera
-            ? 'Point the camera at the barcode, or scan with your handheld scanner.'
-            : 'Use your handheld scanner, or point the camera at the barcode.'}
-        </Text>
-      </View>
+          <View style={styles.scannerContainer}>
+            <CameraView
+              ref={cameraRef}
+              onBarcodeScanned={scanned || checkingExpiry ? undefined : handleBarCodeScanned}
+              style={styles.scanner}
+              barcodeScannerSettings={{
+                barcodeTypes: [
+                  'ean13',
+                  'ean8',
+                  'upc_a',
+                  'upc_e',
+                  'code128',
+                  'code39',
+                  'qr',
+                ],
+              }}
+            />
+            <View style={styles.overlay}>
+              <View style={styles.scanFrame} />
+            </View>
+            {checkingExpiry ? (
+              <View style={styles.expiryCheckOverlay}>
+                <ActivityIndicator size="large" color="#FFFFFF" />
+                <Text style={styles.expiryCheckText}>Checking expiry…</Text>
+              </View>
+            ) : null}
+          </View>
 
-      <View style={styles.scannerContainer}>
-        <CameraView
-          ref={cameraRef}
-          onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
-          style={styles.scanner}
-          barcodeScannerSettings={{
-            barcodeTypes: [
-              'ean13',
-              'ean8',
-              'upc_a',
-              'upc_e',
-              'code39',
-              'code128',
-              'qr',
-            ],
-          }}
-        />
-        <View style={styles.overlay}>
-          <View style={styles.scanFrame} />
-        </View>
-      </View>
-
-      <View style={styles.bottomContainer}>
-        {showQuantitySelector && (
-          <View style={styles.quantitySelectorContainer}>
-            <Text style={styles.quantitySelectorTitle}>How many did you pick?</Text>
-            <View style={styles.quantityControls}>
-              <TouchableOpacity
-                style={[styles.quantityButton, pickedQuantity <= 1 && styles.quantityButtonDisabled]}
-                onPress={decreaseQuantity}
-                disabled={pickedQuantity <= 1}
-              >
-                <Ionicons name="remove" size={24} color={pickedQuantity <= 1 ? "#666" : "#FFFFFF"} />
-              </TouchableOpacity>
-              <View style={styles.quantityDisplay}>
-                <Text style={styles.quantityNumber}>{pickedQuantity}</Text>
-                <Text style={styles.quantityLabel}>of {requiredQuantity}</Text>
+          {showQuantitySelector && (
+            <View style={styles.quantityContainer}>
+              <Text style={styles.quantityTitle}>Select quantity</Text>
+              <View style={styles.quantityControls}>
+                <TouchableOpacity style={styles.qtyButton} onPress={decreaseQuantity}>
+                  <Ionicons name="remove" size={24} color="#FFFFFF" />
+                </TouchableOpacity>
+                <Text style={styles.quantityValue}>{pickedQuantity}</Text>
+                <TouchableOpacity style={styles.qtyButton} onPress={increaseQuantity}>
+                  <Ionicons name="add" size={24} color="#FFFFFF" />
+                </TouchableOpacity>
               </View>
               <TouchableOpacity
-                style={[styles.quantityButton, pickedQuantity >= requiredQuantity && styles.quantityButtonDisabled]}
-                onPress={increaseQuantity}
-                disabled={pickedQuantity >= requiredQuantity}
+                style={styles.confirmButton}
+                onPress={() => confirmScan(pickedQuantity, expectedBarcode)}
               >
-                <Ionicons name="add" size={24} color={pickedQuantity >= requiredQuantity ? "#666" : "#FFFFFF"} />
+                <Text style={styles.confirmButtonText}>Confirm</Text>
               </TouchableOpacity>
             </View>
-            <TouchableOpacity
-              style={styles.confirmButton}
-              onPress={() => confirmScan(pickedQuantity)}
-            >
-              <Text style={styles.buttonText}>Confirm Quantity</Text>
+          )}
+
+          {scanned && !showQuantitySelector && !checkingExpiry && (
+            <TouchableOpacity style={styles.rescanButton} onPress={resetScanner}>
+              <Text style={styles.rescanButtonText}>Scan Again</Text>
             </TouchableOpacity>
-          </View>
-        )}
-        {scanned && !showQuantitySelector && (
-          <TouchableOpacity
-            style={styles.button}
-            onPress={resetScanner}
-          >
-            <Text style={styles.buttonText}>Scan Again</Text>
-          </TouchableOpacity>
-        )}
-        <TouchableOpacity
-          style={[styles.button, styles.secondaryButton]}
-          onPress={() => navigation.goBack()}
-        >
-          <Text style={[styles.buttonText, styles.secondaryButtonText]}>Cancel</Text>
-        </TouchableOpacity>
-      </View>
+          )}
         </>
       )}
+
+      <ExpiredProductModal
+        visible={Boolean(expiredGate)}
+        productName={expiredGate?.productName}
+        expiryValue={expiredGate?.expiryValue}
+        inventoryId={expiredGate?.inventoryId}
+        onPickAnother={() => {
+          const resolve = expiredGate?.resolve;
+          setExpiredGate(null);
+          resolve?.(false);
+          resetScanner();
+        }}
+        onExpiryUpdated={() => {
+          const resolve = expiredGate?.resolve;
+          setExpiredGate(null);
+          resolve?.(true);
+        }}
+      />
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  // 🔹 your same styles (unchanged) 🔹
-  container: { flex: 1, backgroundColor: '#000' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, backgroundColor: 'rgba(0,0,0,0.8)' },
-  backButton: { padding: 8 },
-  headerTitle: { fontSize: 18, fontWeight: '600', color: '#FFFFFF' },
-  placeholder: { width: 40 },
-  instructionContainer: { padding: 20, backgroundColor: 'rgba(0,0,0,0.8)', alignItems: 'center' },
-  instructionTitle: { fontSize: 16, color: '#CCCCCC', marginBottom: 4 },
-  itemName: { fontSize: 20, fontWeight: 'bold', color: '#FFFFFF', marginBottom: 8, textAlign: 'center' },
-  quantityText: { fontSize: 16, color: '#FFD700', fontWeight: '600', marginBottom: 4 },
-  instructionText: { fontSize: 14, color: '#CCCCCC', textAlign: 'center' },
-  permissionHint: {
-    fontSize: 14,
-    color: '#CCCCCC',
-    textAlign: 'center',
-    marginBottom: 12,
-    paddingHorizontal: 12,
-    lineHeight: 20,
+  container: { flex: 1, backgroundColor: '#000000' },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: 'rgba(0,0,0,0.85)',
   },
-  permissionCancel: { marginTop: 12 },
-  permissionItemTitle: {
-    fontSize: 17,
-    fontWeight: '600',
+  headerInfo: { flex: 1, marginHorizontal: 12 },
+  headerTitle: { color: '#FFFFFF', fontSize: 18, fontWeight: '700' },
+  headerSubtitle: { color: '#CCCCCC', fontSize: 13, marginTop: 2 },
+  permissionContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+    backgroundColor: '#111',
+  },
+  permissionButton: {
+    marginTop: 16,
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  permissionButtonText: { color: '#FFFFFF', fontWeight: '700' },
+  message: { color: '#CCCCCC', textAlign: 'center', marginTop: 12, lineHeight: 20 },
+  instruction: {
     color: '#FFFFFF',
     textAlign: 'center',
-    marginBottom: 10,
     paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(0,0,0,0.6)',
   },
   scannerContainer: { flex: 1, position: 'relative' },
   scanner: { flex: 1 },
-  overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
-  scanFrame: { width: 250, height: 250, borderWidth: 2, borderColor: '#00FF00', borderRadius: 12, backgroundColor: 'transparent' },
-  bottomContainer: { padding: 20, backgroundColor: 'rgba(0,0,0,0.8)', gap: 12 },
-  button: { backgroundColor: '#007AFF', paddingVertical: 16, paddingHorizontal: 32, borderRadius: 12, alignItems: 'center' },
-  secondaryButton: { backgroundColor: 'transparent', borderWidth: 1, borderColor: '#666' },
-  buttonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
-  secondaryButtonText: { color: '#CCCCCC' },
-  permissionContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20 },
-  message: { fontSize: 16, color: '#CCCCCC', textAlign: 'center', marginVertical: 20 },
-  quantitySelectorContainer: { backgroundColor: 'rgba(0, 0, 0, 0.9)', padding: 20, borderRadius: 12, marginBottom: 12, alignItems: 'center' },
-  quantitySelectorTitle: { fontSize: 18, fontWeight: '600', color: '#FFFFFF', marginBottom: 16, textAlign: 'center' },
-  quantityControls: { flexDirection: 'row', alignItems: 'center', marginBottom: 20, gap: 20 },
-  quantityButton: { backgroundColor: '#007AFF', width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
-  quantityButtonDisabled: { backgroundColor: '#333' },
-  quantityDisplay: { alignItems: 'center', minWidth: 80 },
-  quantityNumber: { fontSize: 32, fontWeight: 'bold', color: '#FFFFFF' },
-  quantityLabel: { fontSize: 14, color: '#CCCCCC', marginTop: 4 },
-  confirmButton: { backgroundColor: '#34C759', paddingVertical: 16, paddingHorizontal: 32, borderRadius: 12, alignItems: 'center', minWidth: 200 },
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  scanFrame: {
+    width: 250,
+    height: 250,
+    borderWidth: 2,
+    borderColor: '#00FF00',
+    borderRadius: 12,
+    backgroundColor: 'transparent',
+  },
+  expiryCheckOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 12,
+  },
+  expiryCheckText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
+  quantityContainer: {
+    backgroundColor: '#1C1C1E',
+    padding: 20,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+  },
+  quantityTitle: { color: '#FFFFFF', fontSize: 16, fontWeight: '700', marginBottom: 12 },
+  quantityControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 24,
+    marginBottom: 16,
+  },
+  qtyButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#007AFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quantityValue: { color: '#FFFFFF', fontSize: 28, fontWeight: '700', minWidth: 40, textAlign: 'center' },
+  confirmButton: {
+    backgroundColor: '#34C759',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  confirmButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  rescanButton: {
+    margin: 16,
+    backgroundColor: '#007AFF',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  rescanButtonText: { color: '#FFFFFF', fontWeight: '700' },
 });
 
 export default BarcodeScannerScreen;

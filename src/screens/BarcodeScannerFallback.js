@@ -4,11 +4,11 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Alert,
   TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { showAppDialog } from '../context/DialogContext';
 
 const BarcodeScannerFallback = ({ route, navigation }) => {
   const { orderId, itemId, expectedBarcode, itemName } = route.params;
@@ -16,14 +16,16 @@ const BarcodeScannerFallback = ({ route, navigation }) => {
 
   const handleManualEntry = () => {
     if (!manualBarcode.trim()) {
-      Alert.alert('Error', 'Please enter a barcode');
+      showAppDialog('Barcode required', 'Please enter a barcode to continue.', undefined, {
+        variant: 'warning',
+      });
       return;
     }
 
     if (manualBarcode === expectedBarcode) {
-      Alert.alert(
-        'Success!',
-        `✅ ${itemName} verified successfully!`,
+      showAppDialog(
+        'Item verified',
+        `${itemName} was verified successfully.`,
         [
           {
             text: 'OK',
@@ -34,16 +36,24 @@ const BarcodeScannerFallback = ({ route, navigation }) => {
               }
             },
           },
-        ]
+        ],
+        { variant: 'success' }
       );
     } else {
-      Alert.alert(
-        'Wrong Item',
-        `❌ This barcode doesn't match ${itemName}.\n\nExpected: ${expectedBarcode}\nEntered: ${manualBarcode}`,
+      showAppDialog(
+        'Wrong item',
+        `This barcode doesn't match ${itemName}.`,
         [
+          { text: 'Cancel', style: 'cancel', onPress: () => navigation.goBack() },
           { text: 'Try Again', onPress: () => setManualBarcode('') },
-          { text: 'Cancel', onPress: () => navigation.goBack() },
-        ]
+        ],
+        {
+          variant: 'error',
+          details: [
+            { label: 'Expected', value: expectedBarcode, icon: 'barcode-outline' },
+            { label: 'Entered', value: manualBarcode, icon: 'create-outline' },
+          ],
+        }
       );
     }
   };
