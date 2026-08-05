@@ -2,6 +2,7 @@ package com.littlekart1.reactnativestoremanager
 
 import android.app.Application
 import android.content.res.Configuration
+
 import com.facebook.react.PackageList
 import com.facebook.react.ReactApplication
 import com.facebook.react.ReactNativeHost
@@ -22,7 +23,8 @@ class MainApplication : Application(), ReactApplication {
         object : DefaultReactNativeHost(this) {
           override fun getPackages(): List<ReactPackage> {
             val packages = PackageList(this).packages
-            // Packages that cannot be autolinked yet can be added manually here
+            // Packages that cannot be autolinked yet can be added manually here, for example:
+            // packages.add(MyReactNativePackage())
             return packages
           }
 
@@ -41,11 +43,10 @@ class MainApplication : Application(), ReactApplication {
   override fun onCreate() {
     super.onCreate()
     SoLoader.init(this, OpenSourceMergedSoMapping)
-
     if (BuildConfig.IS_NEW_ARCHITECTURE_ENABLED) {
+      // If you opted-in for the New Architecture, we load the native entry point for this app.
       load()
     }
-
     ApplicationLifecycleDispatcher.onApplicationCreate(this)
   }
 

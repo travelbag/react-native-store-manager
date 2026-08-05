@@ -31,6 +31,9 @@ import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { useHardwareBarcodeWedge } from '../hooks/useHardwareBarcodeWedge';
 import { downloadMediaToLocal, isImageMediaUrl, resolvePrintItemUrl } from '../utils/mediaUrl';
+import { useAuth } from '../context/AuthContext';
+import ExpiredProductModal from '../components/ExpiredProductModal';
+import { resolvePickExpiryState } from '../utils/resolvePickExpiry';
 
 const sameOrderId = (o, routeOrderId) =>
   String(o?.id ?? o?.orderId ?? '').trim() === String(routeOrderId ?? '').trim();
@@ -38,6 +41,7 @@ const sameOrderId = (o, routeOrderId) =>
 const OrderPicking = ({ route, navigation }) => {
   const { orderId } = route.params;
   const { height: windowHeight } = useWindowDimensions();
+  const { manager } = useAuth();
   const { 
     orders, 
     refreshOrders,
@@ -62,6 +66,7 @@ const OrderPicking = ({ route, navigation }) => {
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadingItemId, setDownloadingItemId] = useState(null);
   const [pickingDetailItem, setPickingDetailItem] = useState(null);
+  const [expiredGate, setExpiredGate] = useState(null);
   const [wedgeResume, setWedgeResume] = useState(0);
   const autoRackPromptRef = useRef(false);
   const wedgeLockRef = useRef(false);
@@ -181,6 +186,40 @@ const OrderPicking = ({ route, navigation }) => {
     }
   }, []);
 
+  const storeIdForPick =
+    manager?.storeId || manager?.store_id || order?.storeId || order?.store_id || null;
+
+  const promptIfExpired = useCallback((payload) => {
+    return new Promise((resolve) => {
+      setExpiredGate({
+        productName: payload.productName,
+        expiryValue: payload.expiryValue,
+        inventoryId: payload.inventoryId,
+        resolve,
+      });
+    });
+  }, []);
+
+  const ensureProductNotExpiredForPick = useCallback(
+    async (item, barcode) => {
+      const expiryState = await resolvePickExpiryState({
+        storeId: storeIdForPick,
+        barcode,
+        item,
+      });
+      if (!expiryState.isExpired) return true;
+
+      Vibration.vibrate([0, 120, 80, 120]);
+      const allowed = await promptIfExpired({
+        productName: item?.name || item?.productName || barcode,
+        expiryValue: expiryState.expiryValue,
+        inventoryId: expiryState.inventoryId,
+      });
+      return Boolean(allowed);
+    },
+    [promptIfExpired, storeIdForPick]
+  );
+
   const handleWedgeBarcode = useCallback(
     async (raw) => {
       const data = String(raw || '').trim();
@@ -219,23 +258,38 @@ const OrderPicking = ({ route, navigation }) => {
 
       const item = candidates[0];
       wedgeLockRef.current = true;
-      const qty = Math.max(1, Number(item.quantity ?? 1));
-      const scannedAt = new Date().toISOString();
 
       try {
-        await persistItemScan(currentOrderId, data, qty, scannedAt, null);
-      } catch (e) {
-        console.warn('⚠️ Persist scan failed, applying local state only:', e?.message);
-      }
-      updateItemStatus(currentOrderId, item.id, ITEM_STATUS.SCANNED, scannedAt, qty);
-      Vibration.vibrate(100);
-      setTimeout(() => {
-        checkOrderCompletion();
+        const canPick = await ensureProductNotExpiredForPick(item, data);
+        if (!canPick) {
+          return;
+        }
+
+        const qty = Math.max(1, Number(item.quantity ?? 1));
+        const scannedAt = new Date().toISOString();
+
+        try {
+          await persistItemScan(currentOrderId, data, qty, scannedAt, null);
+        } catch (e) {
+          console.warn('⚠️ Persist scan failed, applying local state only:', e?.message);
+        }
+        updateItemStatus(currentOrderId, item.id, ITEM_STATUS.SCANNED, scannedAt, qty);
+        Vibration.vibrate(100);
+        setTimeout(() => {
+          checkOrderCompletion();
+        }, 450);
+      } finally {
         wedgeLockRef.current = false;
         setWedgeResume((k) => k + 1);
-      }, 450);
+      }
     },
-    [orderId, persistItemScan, updateItemStatus, checkOrderCompletion]
+    [
+      orderId,
+      persistItemScan,
+      updateItemStatus,
+      checkOrderCompletion,
+      ensureProductNotExpiredForPick,
+    ]
   );
 
   const { hardwareInputProps, focusCapture } = useHardwareBarcodeWedge({
@@ -702,6 +756,9 @@ const OrderPicking = ({ route, navigation }) => {
       itemName: item.productName || item.name,
       requiredQuantity: item.quantity,
       scanWithCamera: useCamera,
+      storeId: storeIdForPick,
+      inventoryId: item.inventory_id || item.inventoryId || null,
+      expiryDate: item.expiry_date || item.expiryDate || null,
       onScanSuccess: async (scannedBarcode, quantity) => {
         try {
           await persistItemScan(
@@ -1216,6 +1273,23 @@ const OrderPicking = ({ route, navigation }) => {
           </View>
         </View>
       ) : null}
+      <ExpiredProductModal
+        visible={Boolean(expiredGate)}
+        productName={expiredGate?.productName}
+        expiryValue={expiredGate?.expiryValue}
+        inventoryId={expiredGate?.inventoryId}
+        onPickAnother={() => {
+          const resolve = expiredGate?.resolve;
+          setExpiredGate(null);
+          resolve?.(false);
+          setWedgeResume((k) => k + 1);
+        }}
+        onExpiryUpdated={() => {
+          const resolve = expiredGate?.resolve;
+          setExpiredGate(null);
+          resolve?.(true);
+        }}
+      />
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

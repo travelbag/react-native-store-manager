@@ -610,6 +610,12 @@ export function OrdersProvider({ children }) {
           ...existingRack,
           location: rackLocation,
         };
+        const expiryRaw = String(
+          item?.expiry_date ?? item?.expiryDate ?? item?.expiry ?? ''
+        ).trim();
+        const expiryDate = expiryRaw.length >= 10 ? expiryRaw.slice(0, 10) : expiryRaw;
+        const inventoryId =
+          item?.inventory_id ?? item?.inventoryId ?? item?.inventoryID ?? null;
 
         return {
           id: createLocalItemId(orderId, item, idx, 'product'),
@@ -624,6 +630,10 @@ export function OrdersProvider({ children }) {
           category: item.type ?? item.category ?? '',
           rack,
           product_racknumber: productRack || null,
+          inventory_id: inventoryId,
+          inventoryId,
+          expiry_date: expiryDate || null,
+          expiryDate: expiryDate || null,
           status: scanned ? ITEM_STATUS.SCANNED : (item.status && Object.values(ITEM_STATUS).includes(item.status) ? item.status : ITEM_STATUS.PENDING),
           weight: item.weight ?? item.selectedWeight ?? '',
           mrp: item.mrp ?? item.mrp_price ?? item.mrpPrice ?? '',

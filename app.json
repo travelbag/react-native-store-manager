@@ -30,6 +30,7 @@
       },
       "googleServicesFile": "./google-services.json",
       "edgeToEdgeEnabled": true,
+      "softwareKeyboardLayoutMode": "resize",
       "permissions": [
         "CAMERA",
         "android.permission.CAMERA",
