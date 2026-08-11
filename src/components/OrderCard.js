@@ -132,7 +132,9 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
   };
 
   const handleAcceptOrder = async () => {
-    await acceptOrder(orderId);
+    const accepted = await acceptOrder(orderId);
+    if (!accepted) return;
+    navigation.navigate('OrdersList', { selectedTab: ORDER_STATUS.ACCEPTED });
   };
 
   const handleReject = () => {

@@ -36,6 +36,7 @@ class NotificationService {
     this.expoPushToken = null;
     this.notificationListener = null;
     this.responseListener = null;
+    this.orderNotificationIdsByOrder = new Map();
   }
 
   /**
@@ -176,6 +177,82 @@ class NotificationService {
     return token;
   }
 
+  orderNotificationIdsByOrder = new Map();
+
+  rememberNotificationForOrder(notification) {
+    const orderId = String(
+      notification?.request?.content?.data?.orderId ??
+        notification?.request?.content?.data?.order_id ??
+        ''
+    ).trim();
+    const identifier = notification?.request?.identifier;
+    if (!orderId || !identifier) return;
+
+    const existing = this.orderNotificationIdsByOrder.get(orderId) || new Set();
+    existing.add(identifier);
+    this.orderNotificationIdsByOrder.set(orderId, existing);
+  }
+
+  /**
+   * Clears every tray + scheduled local notification for this order
+   * (remote FCM and the local "new order" sound alert).
+   */
+  async dismissNotificationsForOrder(orderId) {
+    const target = String(orderId ?? '').trim();
+    if (!target) return;
+
+    const identifiers = new Set(this.orderNotificationIdsByOrder.get(target) || []);
+
+    try {
+      const presented = await Notifications.getPresentedNotificationsAsync();
+      for (const notification of presented) {
+        const content = notification?.request?.content || {};
+        const data = content.data || {};
+        const presentedOrderId = String(data.orderId ?? data.order_id ?? '').trim();
+        const text = `${content.title || ''} ${content.body || ''}`;
+        const matchesOrder =
+          presentedOrderId === target ||
+          (target.length >= 6 && text.includes(target));
+        if (matchesOrder && notification.request?.identifier) {
+          identifiers.add(notification.request.identifier);
+        }
+      }
+    } catch (e) {
+      if (__DEV__) console.warn('⚠️ Could not list presented notifications:', e?.message ?? e);
+    }
+
+    try {
+      const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+      for (const notification of scheduled) {
+        const data = notification?.content?.data || notification?.request?.content?.data || {};
+        const scheduledOrderId = String(data.orderId ?? data.order_id ?? '').trim();
+        const identifier = notification?.identifier || notification?.request?.identifier;
+        if (scheduledOrderId === target && identifier) {
+          identifiers.add(identifier);
+        }
+      }
+    } catch (e) {
+      if (__DEV__) console.warn('⚠️ Could not list scheduled notifications:', e?.message ?? e);
+    }
+
+    await Promise.all(
+      [...identifiers].map(async (identifier) => {
+        try {
+          await Notifications.dismissNotificationAsync(identifier);
+        } catch (_) {
+          /* already gone from the tray */
+        }
+        try {
+          await Notifications.cancelScheduledNotificationAsync(identifier);
+        } catch (_) {
+          /* already fired or cancelled */
+        }
+      })
+    );
+
+    this.orderNotificationIdsByOrder.delete(target);
+  }
+
   setupNotificationListeners(onNotificationReceived, onNotificationResponseReceived) {
     // Re-registering without this stacks duplicate handlers (e.g. after appState/manager effect re-runs).
     this.removeNotificationListeners();
@@ -183,6 +260,7 @@ class NotificationService {
     // Foreground only: Expo does not invoke this when the app is backgrounded (OS shows the notification).
     this.notificationListener = Notifications.addNotificationReceivedListener((notification) => {
       const data = notification.request.content.data || {};
+      this.rememberNotificationForOrder(notification);
       logNotificationPath('foreground_received', {
         type: data.type,
         orderId: data.orderId,
@@ -195,6 +273,7 @@ class NotificationService {
 
     // User tapped notification (from foreground, background, or killed state after launch).
     this.responseListener = Notifications.addNotificationResponseReceivedListener((response) => {
+      this.rememberNotificationForOrder(response.notification);
       const data = response.notification.request.content.data || {};
       logNotificationPath('notification_tap', {
         type: data.type,
@@ -217,7 +296,7 @@ class NotificationService {
   }
 
   async scheduleLocalNotification(title, body, data = {}) {
-    await Notifications.scheduleNotificationAsync({
+    const identifier = await Notifications.scheduleNotificationAsync({
       content: {
         title,
         body,
@@ -228,6 +307,10 @@ class NotificationService {
       },
       trigger: Platform.OS === 'android' ? { channelId: ORDER_NOTIFICATION_CHANNEL_ID, seconds: 1 } : { seconds: 1 },
     });
+    this.rememberNotificationForOrder({
+      request: { identifier, content: { data } },
+    });
+    return identifier;
   }
 
   // Enhanced notification handling for production

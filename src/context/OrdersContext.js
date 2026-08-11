@@ -744,7 +744,7 @@ export function OrdersProvider({ children }) {
           ? { channelId: ORDER_NOTIFICATION_CHANNEL_ID, seconds: 1 }
           : { seconds: 1 };
 
-      await Notifications.scheduleNotificationAsync({
+      const identifier = await Notifications.scheduleNotificationAsync({
         content: {
           title: 'New order — pending',
           body: `Order #${orderId}${order.customerName ? ` · ${order.customerName}` : ''}`,
@@ -758,6 +758,12 @@ export function OrdersProvider({ children }) {
           interruptionLevel: 'timeSensitive',
         },
         trigger,
+      });
+      NotificationService.rememberNotificationForOrder({
+        request: {
+          identifier,
+          content: { data: { orderId } },
+        },
       });
     } catch (e) {
       console.warn('⚠️ Pending order sound failed:', e?.message ?? e);
@@ -1411,16 +1417,20 @@ export function OrdersProvider({ children }) {
         console.log('✅ Order accepted successfully in backend');
         // Update frontend state
         updateOrderStatus(orderId, ORDER_STATUS.ACCEPTED);
+        await NotificationService.dismissNotificationsForOrder(orderId);
         // Fetch latest to reflect any concurrent changes
         refreshOrders();
+        return true;
       } else {
         console.error('❌ Failed to accept order in backend:', response.status);
         console.error('❌ Error details:', responseData);
         // Don't mutate local state on failure to avoid divergence
+        return false;
       }
     } catch (error) {
       console.error('❌ Error accepting order:', error);
       // Avoid local state change on failure
+      return false;
     }
   };
 
