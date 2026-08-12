@@ -12,6 +12,7 @@ import { apiClient } from '../services/apiClient';
 import { assignDriver, wasOrderAssigned } from '../services/DriverService';
 import { resolvePrintItemUrl } from '../utils/mediaUrl';
 import { toExpiryDateOnly } from '../utils/inventoryExpiry';
+import { resolveItemWeight } from '../utils/itemDisplay';
 import {
   getUserFacingError,
   showUserFacingErrorDialog,
@@ -446,6 +447,7 @@ export function OrdersProvider({ children }) {
   const appStateRef = React.useRef(AppState.currentState);
   const isFetchingRef = React.useRef(false);
   const lastFetchAtRef = React.useRef(0);
+  const stateErrorRef = React.useRef(null);
   /** orderId -> last successfully merged time (dedupes duplicate push bursts) */
   const groceryOrderHandledAtRef = React.useRef(new Map());
   const groceryOrderFetchInFlightRef = React.useRef(new Set());
@@ -471,6 +473,10 @@ export function OrdersProvider({ children }) {
   useEffect(() => {
     ordersRef.current = Array.isArray(state.orders) ? state.orders : [];
   }, [state.orders]);
+
+  useEffect(() => {
+    stateErrorRef.current = state.error;
+  }, [state.error]);
 
   useEffect(() => {
     previousPollOrderIdsRef.current = null;
@@ -627,6 +633,7 @@ export function OrdersProvider({ children }) {
         );
         const inventoryId =
           item?.inventory_id ?? item?.inventoryId ?? item?.inventoryID ?? null;
+        const weight = resolveItemWeight(item);
 
         return {
           id: createLocalItemId(orderId, item, idx, 'product'),
@@ -646,7 +653,8 @@ export function OrdersProvider({ children }) {
           expiry_date: expiryDate || null,
           expiryDate: expiryDate || null,
           status: scanned ? ITEM_STATUS.SCANNED : (item.status && Object.values(ITEM_STATUS).includes(item.status) ? item.status : ITEM_STATUS.PENDING),
-          weight: item.weight ?? item.selectedWeight ?? '',
+          weight,
+          selectedWeight: item.selectedWeight ?? item.selected_weight ?? weight,
           mrp: item.mrp ?? item.mrp_price ?? item.mrpPrice ?? '',
           scannedAt: item.scannedAt ?? null,
           pickedQuantity,
@@ -935,7 +943,9 @@ export function OrdersProvider({ children }) {
       if (result.ok) {
         consecutiveFailuresRef.current = 0;
         applyOrdersSnapshot(result.orders);
-        dispatch({ type: ACTIONS.SET_ERROR, payload: null });
+        if (stateErrorRef.current) {
+          dispatch({ type: ACTIONS.SET_ERROR, payload: null });
+        }
         return { ok: true, orders: result.orders };
       }
 

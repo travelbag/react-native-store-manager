@@ -44,6 +44,7 @@ import {
   showNoPackoutRacksDialog,
   showPackoutRackAssignedDialog,
 } from '../utils/packoutRack';
+import { formatItemWeightLabel } from '../utils/itemDisplay';
 
 const sameOrderId = (o, routeOrderId) =>
   String(o?.id ?? o?.orderId ?? '').trim() === String(routeOrderId ?? '').trim();
@@ -82,6 +83,8 @@ const OrderPicking = ({ route, navigation }) => {
   const wedgeLockRef = useRef(false);
   const orderRef = useRef(null);
   const safeItemsRef = useRef([]);
+  /** Sync pick counts so rapid wedge scans don't both read stale React state. */
+  const pickedQtyByItemRef = useRef({});
   const pickListRef = useRef(null);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
 
@@ -115,10 +118,15 @@ const OrderPicking = ({ route, navigation }) => {
   }, [orders, orderId]);
 
   // Check for cancellation on screen focus and stop picking if cancelled
+  const refreshOrdersRef = useRef(refreshOrders);
+  refreshOrdersRef.current = refreshOrders;
+
   useFocusEffect(
     React.useCallback(() => {
+      let cancelled = false;
       const checkOrderStatus = async () => {
-        const latest = await refreshOrders(null, { force: true });
+        const latest = await refreshOrdersRef.current(null, { force: true });
+        if (cancelled) return;
         const list = Array.isArray(latest) ? latest : [];
         const currentOrder = list.find((o) => sameOrderId(o, orderId));
         if (currentOrder && String(currentOrder.status || currentOrder.orderStatus || '').toLowerCase() === 'cancelled') {
@@ -135,8 +143,10 @@ const OrderPicking = ({ route, navigation }) => {
         }
       };
       checkOrderStatus();
-      return () => {}; // Cleanup if needed
-    }, [orderId, refreshOrders, navigation])
+      return () => {
+        cancelled = true;
+      };
+    }, [orderId, navigation])
   );
 
   // Get items array safely
@@ -159,6 +169,24 @@ const OrderPicking = ({ route, navigation }) => {
 
   orderRef.current = order;
   safeItemsRef.current = safeItems;
+
+  useEffect(() => {
+    pickedQtyByItemRef.current = {};
+  }, [orderId]);
+
+  useEffect(() => {
+    const map = { ...pickedQtyByItemRef.current };
+    for (const item of safeItems) {
+      if (!item?.id) continue;
+      const fromItem = Math.max(0, Number(item.pickedQuantity ?? 0));
+      if (item.status === ITEM_STATUS.SCANNED) {
+        map[item.id] = Math.max(1, Number(item.quantity ?? 1));
+      } else {
+        map[item.id] = Math.max(Number(map[item.id] ?? 0), fromItem);
+      }
+    }
+    pickedQtyByItemRef.current = map;
+  }, [safeItems]);
 
   const hasWedgePickLines = React.useMemo(
     () =>
@@ -280,26 +308,32 @@ const OrderPicking = ({ route, navigation }) => {
       if (!ord || !list.length) return;
 
       const currentOrderId = ord.id || ord.orderId || orderId;
-      const candidates = list.filter((item) => {
-        if (!item) return false;
-        const rawType = String(item.item_type || item.type || '').toLowerCase();
-        const printItem =
-          rawType === 'print' ||
-          Boolean(
-            item.fileUrl ||
-              item.file_url ||
-              item.printUrl ||
-              item.print_url ||
-              item.document_url ||
-              item.documentUrl
-          );
-        if (printItem) return false;
-        if (item.status === ITEM_STATUS.SCANNED || item.status === ITEM_STATUS.UNAVAILABLE) {
-          return false;
-        }
-        const bc = String(item.barcode || '').trim();
-        return bc === data;
-      });
+      const candidates = list
+        .filter((item) => {
+          if (!item) return false;
+          const rawType = String(item.item_type || item.type || '').toLowerCase();
+          const printItem =
+            rawType === 'print' ||
+            Boolean(
+              item.fileUrl ||
+                item.file_url ||
+                item.printUrl ||
+                item.print_url ||
+                item.document_url ||
+                item.documentUrl
+            );
+          if (printItem) return false;
+          if (item.status === ITEM_STATUS.SCANNED || item.status === ITEM_STATUS.UNAVAILABLE) {
+            return false;
+          }
+          const bc = String(item.barcode || '').trim();
+          return bc === data;
+        })
+        // Prefer a line already partially scanned so multi-qty finishes on the same row.
+        .sort(
+          (a, b) =>
+            Math.max(0, Number(b.pickedQuantity ?? 0)) - Math.max(0, Number(a.pickedQuantity ?? 0))
+        );
 
       if (candidates.length === 0) {
         showAppDialog(
@@ -324,19 +358,38 @@ const OrderPicking = ({ route, navigation }) => {
           return;
         }
 
-        const qty = Math.max(1, Number(item.quantity ?? 1));
+        // One physical scan = one unit. Qty 3 toothpaste requires 3 separate scans.
+        const requiredQty = Math.max(1, Number(item.quantity ?? 1));
+        const prevPicked = Math.max(
+          0,
+          Number(pickedQtyByItemRef.current[item.id] ?? item.pickedQuantity ?? 0)
+        );
+        const nextPicked = Math.min(requiredQty, prevPicked + 1);
+        pickedQtyByItemRef.current[item.id] = nextPicked;
         const scannedAt = new Date().toISOString();
+        const isComplete = nextPicked >= requiredQty;
 
-        try {
-          await persistItemScan(currentOrderId, data, qty, scannedAt, null);
-        } catch (e) {
-          console.warn('⚠️ Persist scan failed, applying local state only:', e?.message);
+        if (isComplete) {
+          try {
+            await persistItemScan(currentOrderId, data, nextPicked, scannedAt, null);
+          } catch (e) {
+            console.warn('⚠️ Persist scan failed, applying local state only:', e?.message);
+          }
+          updateItemStatus(currentOrderId, item.id, ITEM_STATUS.SCANNED, scannedAt, nextPicked);
+          Vibration.vibrate(100);
+          setTimeout(() => {
+            checkOrderCompletion();
+          }, 450);
+        } else {
+          updateItemStatus(
+            currentOrderId,
+            item.id,
+            item.status || ITEM_STATUS.PENDING,
+            scannedAt,
+            nextPicked
+          );
+          Vibration.vibrate(60);
         }
-        updateItemStatus(currentOrderId, item.id, ITEM_STATUS.SCANNED, scannedAt, qty);
-        Vibration.vibrate(100);
-        setTimeout(() => {
-          checkOrderCompletion();
-        }, 450);
       } finally {
         wedgeLockRef.current = false;
         setWedgeResume((k) => k + 1);
@@ -359,13 +412,16 @@ const OrderPicking = ({ route, navigation }) => {
     resumeToken: wedgeResume,
   });
 
+  const focusCaptureRef = useRef(focusCapture);
+  focusCaptureRef.current = focusCapture;
+
   useFocusEffect(
     React.useCallback(() => {
       Keyboard.dismiss();
       setWedgeResume((k) => k + 1);
-      const t = setTimeout(() => focusCapture(), 80);
+      const t = setTimeout(() => focusCaptureRef.current(), 80);
       return () => clearTimeout(t);
-    }, [focusCapture])
+    }, [])
   );
 
   // When every line is picked or unavailable, leave picking in one step (Accepted tab),
@@ -658,15 +714,6 @@ const OrderPicking = ({ route, navigation }) => {
         } else {
           await showNoPackoutRacksDialog();
         }
-        const readyNotificationReason = String(result?.readyNotification?.reason || '').toLowerCase();
-        if (readyNotificationReason === 'no_checked_in_available_drivers') {
-          showAppDialog(
-            'No drivers available',
-            'No checked-in drivers are available right now. Please try again shortly.',
-            [{ text: 'OK' }],
-            { variant: 'warning', icon: 'car-outline' }
-          );
-        }
       }
       navigation.navigate('OrdersList', {
         selectedTab: isPickupOrder ? ORDER_STATUS.PICKUP_AT_STORE : ORDER_STATUS.ACCEPTED,
@@ -691,7 +738,7 @@ const OrderPicking = ({ route, navigation }) => {
           'No drivers available',
           "Couldn't find an available driver right now. Please try again shortly.",
           [{ text: 'OK' }],
-          { variant: 'warning', icon: 'car-outline' }
+          { variant: 'warning', icon: 'alert-circle-outline' }
         );
       } else {
         await showUserFacingErrorDialog(error, { action: 'mark this order ready' });
@@ -825,30 +872,52 @@ const OrderPicking = ({ route, navigation }) => {
   const handleScanItem = (item, options = {}) => {
     const useCamera = options.useCamera === true;
     const currentOrderId = order?.id || order?.orderId || orderId;
+    const alreadyPicked = Math.max(0, Number(item.pickedQuantity ?? 0));
+    const requiredQuantity = Math.max(1, Number(item.quantity ?? 1));
     navigation.navigate('BarcodeScanner', {
       orderId: currentOrderId,
       itemId: item.id,
       expectedBarcode: item.barcode,
       itemName: item.productName || item.name,
-      requiredQuantity: item.quantity,
+      requiredQuantity,
+      alreadyPickedQuantity: alreadyPicked,
       scanWithCamera: useCamera,
       storeId: storeIdForPick,
       inventoryId: item.inventory_id || item.inventoryId || null,
       expiryDate: item.expiry_date || item.expiryDate || null,
       onScanSuccess: async (scannedBarcode, quantity) => {
+        const totalPicked = Math.max(1, Number(quantity ?? requiredQuantity));
+        pickedQtyByItemRef.current[item.id] = totalPicked;
         try {
           await persistItemScan(
             currentOrderId,
             scannedBarcode,
-            quantity,
+            totalPicked,
             new Date().toISOString(),
             null
           );
         } catch (e) {
           console.warn('⚠️ Persist scan failed, applying local state only:', e?.message);
         }
-        updateItemStatus(currentOrderId, item.id, ITEM_STATUS.SCANNED, new Date().toISOString(), quantity);
+        updateItemStatus(
+          currentOrderId,
+          item.id,
+          ITEM_STATUS.SCANNED,
+          new Date().toISOString(),
+          totalPicked
+        );
         setTimeout(checkOrderCompletion, 100);
+      },
+      onScanProgress: (scannedBarcode, pickedSoFar) => {
+        const next = Math.max(0, Number(pickedSoFar ?? 0));
+        pickedQtyByItemRef.current[item.id] = next;
+        updateItemStatus(
+          currentOrderId,
+          item.id,
+          item.status || ITEM_STATUS.PENDING,
+          new Date().toISOString(),
+          next
+        );
       },
     });
   };
@@ -877,14 +946,30 @@ const OrderPicking = ({ route, navigation }) => {
     );
   };
 
+  const getItemWeightLabel = (item) => formatItemWeightLabel(item, '—');
+
+  const renderBarcodeHighlight = (barcodeValue) => {
+    if (!barcodeValue) return null;
+    return (
+      <View style={styles.barcodeHighlight}>
+        <Ionicons name="barcode-outline" size={18} color="#7A4F01" />
+        <Text style={styles.barcodeHighlightText}>{String(barcodeValue)}</Text>
+      </View>
+    );
+  };
+
   const renderItemCard = ({ item }) => {
     const printItem = isPrintItem(item);
     const meta = printItem ? getPrintMeta(item) : null;
     const displayName = printItem ? getPrintFileName(item) : item.name;
     const displayCategory = printItem ? 'Print file' : item.category;
     const barcodeValue = !printItem ? item.barcode : '';
-    const quantity = Number(item?.quantity ?? 0);
-    const price = Number(item?.price ?? 0);
+    const quantity = Math.max(0, Number(item?.quantity ?? 0));
+    const weightLabel = getItemWeightLabel(item);
+    const scannedCount =
+      item.status === ITEM_STATUS.SCANNED
+        ? quantity
+        : Math.max(0, Number(item.pickedQuantity ?? pickedQtyByItemRef.current[item.id] ?? 0));
     if (item.status === ITEM_STATUS.SCANNED || item.status === ITEM_STATUS.UNAVAILABLE) {
       const picked = item.status === ITEM_STATUS.SCANNED;
       return (
@@ -920,11 +1005,17 @@ const OrderPicking = ({ route, navigation }) => {
             {picked
               ? printItem
                 ? `Printed${item.scannedAt ? ` · ${new Date(item.scannedAt).toLocaleTimeString()}` : ''}`
-                : `Picked ${item.pickedQuantity || item.quantity}/${item.quantity}`
+                : `Picked ${scannedCount}/${quantity}`
               : printItem
                 ? 'Cannot print'
                 : 'Not available'}
           </Text>
+          {picked && !printItem ? (
+            <Text style={styles.itemCardCompactWeight} numberOfLines={1}>
+              Weight: {weightLabel}
+            </Text>
+          ) : null}
+          {!printItem ? renderBarcodeHighlight(barcodeValue) : null}
           <Text style={styles.itemCardCompactHint}>Tap for details</Text>
         </TouchableOpacity>
       );
@@ -948,16 +1039,23 @@ const OrderPicking = ({ route, navigation }) => {
                 <Text style={styles.itemDetails}>
                   Pages: {meta.pages} | {meta.colorMode === 'black_white' ? 'B/W' : 'Color'} | {meta.orientation}
                 </Text>
-                <Text style={styles.itemDetails}>
-                  Qty: {meta.quantity} × ${meta.price} = ${(meta.quantity * meta.price).toFixed(2)}
-                </Text>
+                <Text style={styles.itemDetails}>Qty: {meta.quantity}</Text>
               </>
             ) : (
               <>
-                <Text style={styles.itemDetails}>
-                  Qty: {quantity} × ${price} = ${(quantity * price).toFixed(2)}
-                </Text>
-                {barcodeValue ? <Text style={styles.barcode}>Barcode: {barcodeValue}</Text> : null}
+                <View style={styles.pickMetaRow}>
+                  <View style={styles.pickMetaChip}>
+                    <Text style={styles.pickMetaChipLabel}>Qty</Text>
+                    <Text style={styles.pickMetaChipValue}>{quantity}</Text>
+                  </View>
+                  <View style={[styles.pickMetaChip, styles.pickMetaChipWeight]}>
+                    <Text style={styles.pickMetaChipLabel}>Weight</Text>
+                    <Text style={styles.pickMetaChipValue} numberOfLines={1}>
+                      {weightLabel}
+                    </Text>
+                  </View>
+                </View>
+                {renderBarcodeHighlight(barcodeValue)}
                 {renderItemExpiryLine(item)}
               </>
             )}
@@ -970,6 +1068,29 @@ const OrderPicking = ({ route, navigation }) => {
             />
           </View>
         </View>
+
+        {!printItem && quantity > 0 ? (
+          <View
+            style={[
+              styles.scanCountBanner,
+              scannedCount > 0 ? styles.scanCountBannerActive : null,
+            ]}
+          >
+            <Ionicons
+              name="layers-outline"
+              size={18}
+              color={scannedCount > 0 ? '#FFFFFF' : '#0F5132'}
+            />
+            <Text
+              style={[
+                styles.scanCountBannerText,
+                scannedCount > 0 ? styles.scanCountBannerTextActive : null,
+              ]}
+            >
+              {scannedCount}/{quantity} scanned
+            </Text>
+          </View>
+        ) : null}
 
         {!printItem && (
           <View style={styles.rackInfo}>
@@ -1047,6 +1168,7 @@ const OrderPicking = ({ route, navigation }) => {
             </>
           )}
 
+          {/* Not Available temporarily hidden
           {item.status !== ITEM_STATUS.SCANNED && item.status !== ITEM_STATUS.UNAVAILABLE && (
             <TouchableOpacity
               style={styles.unavailableButton}
@@ -1056,6 +1178,7 @@ const OrderPicking = ({ route, navigation }) => {
               <Text style={styles.buttonText}>{printItem ? 'Cannot Print' : 'Not Available'}</Text>
             </TouchableOpacity>
           )}
+          */}
         </View>
       </View>
     );
@@ -1098,9 +1221,7 @@ const OrderPicking = ({ route, navigation }) => {
       {hasWedgePickLines ? (
         <View style={styles.scannerHintBanner}>
           <Ionicons name="barcode-outline" size={18} color="#0F5132" />
-          <Text style={styles.scannerHintText}>
-            Scanner ready — scan each product barcode here. Use Camera on a row only if you need the phone camera.
-          </Text>
+          <Text style={styles.scannerHintText}>Scanner ready — scan once per unit.</Text>
         </View>
       ) : null}
 
@@ -1225,11 +1346,22 @@ const OrderPicking = ({ route, navigation }) => {
                 ) : (
                   <>
                     <Text style={styles.pickingDetailLine}>Category: {pickingDetailItem.category || '—'}</Text>
-                    <Text style={styles.pickingDetailLine}>Barcode: {pickingDetailItem.barcode || '—'}</Text>
+                    {renderBarcodeHighlight(pickingDetailItem.barcode)}
                     <Text style={styles.pickingDetailLine}>
-                      Qty: {pickingDetailItem.quantity} × ${Number(pickingDetailItem.price ?? 0)} = $
-                      {(Number(pickingDetailItem.quantity ?? 0) * Number(pickingDetailItem.price ?? 0)).toFixed(2)}
+                      Qty: {pickingDetailItem.quantity}
                     </Text>
+                    <Text style={styles.pickingDetailLine}>
+                      Weight: {getItemWeightLabel(pickingDetailItem)}
+                    </Text>
+                    {!isPrintItem(pickingDetailItem) ? (
+                      <Text style={styles.pickingDetailLine}>
+                        Scanned:{' '}
+                        {pickingDetailItem.status === ITEM_STATUS.SCANNED
+                          ? pickingDetailItem.quantity
+                          : Math.max(0, Number(pickingDetailItem.pickedQuantity ?? 0))}
+                        /{pickingDetailItem.quantity}
+                      </Text>
+                    ) : null}
                     <Text style={styles.pickingDetailLine}>
                       Rack:{' '}
                       {String(
@@ -1273,6 +1405,9 @@ const OrderPicking = ({ route, navigation }) => {
         ref={pickListRef}
         style={styles.pickList}
         data={safeItems}
+        extraData={safeItems
+          .map((i) => `${i?.id}:${i?.pickedQuantity ?? 0}:${i?.status}`)
+          .join('|')}
         renderItem={renderItemCard}
         keyExtractor={(item, index) =>
           [
@@ -1318,7 +1453,7 @@ const OrderPicking = ({ route, navigation }) => {
               <Ionicons name="checkmark-done-outline" size={18} color="#FFFFFF" />
               <Text style={styles.markReadyButtonText}>
                 {isAssigningDriver
-                  ? 'Saving…'
+                  ? 'Checking…'
                   : isPickupOrder
                   ? 'Mark Ready & Notify'
                   : 'Assign Driver'}
@@ -1465,6 +1600,28 @@ const styles = StyleSheet.create({
     color: '#0F5132',
     lineHeight: 18,
   },
+  scanCountBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginBottom: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: '#D1E7DD',
+  },
+  scanCountBannerActive: {
+    backgroundColor: '#0F5132',
+  },
+  scanCountBannerText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0F5132',
+  },
+  scanCountBannerTextActive: {
+    color: '#FFFFFF',
+  },
   listContent: {
     padding: 16,
   },
@@ -1525,16 +1682,22 @@ const styles = StyleSheet.create({
     color: '#111',
   },
   itemCardCompactSub: {
-    marginTop: 4,
-    fontSize: 12,
-    color: '#2E7D32',
-    fontWeight: '500',
+    marginTop: 8,
+    fontSize: 16,
+    color: '#1B5E20',
+    fontWeight: '700',
   },
   itemCardCompactSubUnavail: {
-    marginTop: 4,
-    fontSize: 12,
+    marginTop: 8,
+    fontSize: 15,
     color: '#C62828',
-    fontWeight: '500',
+    fontWeight: '600',
+  },
+  itemCardCompactWeight: {
+    marginTop: 4,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333333',
   },
   itemCardCompactHint: {
     marginTop: 2,
@@ -1647,6 +1810,56 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#333333',
     marginBottom: 2,
+  },
+  pickMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  pickMetaChip: {
+    minWidth: 72,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: '#EEF2FF',
+  },
+  pickMetaChipWeight: {
+    flexGrow: 1,
+    backgroundColor: '#E8F5E9',
+  },
+  pickMetaChipLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#666666',
+    marginBottom: 2,
+  },
+  pickMetaChipValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111111',
+  },
+  barcodeHighlight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 8,
+    marginTop: 2,
+    marginBottom: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: '#FFF3CD',
+    borderWidth: 1,
+    borderColor: '#FFECB5',
+  },
+  barcodeHighlightText: {
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+    color: '#7A4F01',
+    fontVariant: ['tabular-nums'],
   },
   barcode: {
     fontSize: 12,

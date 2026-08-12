@@ -22,6 +22,7 @@ import {
 } from '../utils/packoutRack';
 import PackoutRackBadge from './PackoutRackBadge';
 import { useNavigation } from '@react-navigation/native';
+import { formatItemWeightLabel } from '../utils/itemDisplay';
 
 const OrderCard = ({ order, hideStatusBadge = false }) => {
   const { updateOrderStatus, acceptOrder, rejectOrder, refreshOrders, markOrderReady } = useOrders();
@@ -194,15 +195,6 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
       } else {
         await showNoPackoutRacksDialog();
       }
-      const readyNotificationReason = String(result?.readyNotification?.reason || '').toLowerCase();
-      if (readyNotificationReason === 'no_checked_in_available_drivers') {
-        showAppDialog(
-          'No drivers available',
-          'No checked-in drivers are available right now. Please try again shortly.',
-          undefined,
-          { variant: 'warning', icon: 'car-outline' }
-        );
-      }
       if (typeof refreshOrders === 'function') {
         await refreshOrders(null, { force: true });
       }
@@ -285,6 +277,26 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
     });
   }, [items]);
 
+  const renderProductPickHints = (item) => {
+    if (isPrintItem(item)) return null;
+    const quantity = Number(item?.quantity ?? 0);
+    const weight = formatItemWeightLabel(item, '—');
+    const barcode = String(item?.barcode || '').trim();
+    return (
+      <>
+        <Text style={styles.itemPickMeta}>
+          Qty: {quantity} · Weight: {weight}
+        </Text>
+        {barcode ? (
+          <View style={styles.barcodeHighlight}>
+            <Ionicons name="barcode-outline" size={14} color="#7A4F01" />
+            <Text style={styles.barcodeHighlightText}>{barcode}</Text>
+          </View>
+        ) : null}
+      </>
+    );
+  };
+
   const renderItemsList = () =>
     items.map((item, index) => (
       <View key={index} style={styles.itemRow}>
@@ -317,6 +329,7 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
               return `${quantity} × ₹${price} = ₹${(quantity * price).toFixed(2)}`;
             })()}
           </Text>
+          {renderProductPickHints(item)}
           {isPrintItem(item) &&
             (() => {
               const meta = getPrintMeta(item);
@@ -423,6 +436,7 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
                   return `${quantity} × ₹${price} = ₹${(quantity * price).toFixed(2)}`;
                 })()}
               </Text>
+              {renderProductPickHints(item)}
               {isPrintItem(item) ? (
                 (() => {
                   const meta = getPrintMeta(item);
@@ -506,7 +520,7 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
       >
         <Ionicons name="checkmark-done-outline" size={18} color="#FFFFFF" />
         <Text style={styles.primaryButtonText}>
-          {isAssigningDriver ? 'Saving…' : 'Assign Driver'}
+          {isAssigningDriver ? 'Checking…' : 'Assign Driver'}
         </Text>
       </TouchableOpacity>
     );
@@ -677,7 +691,7 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
         <Pressable style={styles.modalBackdrop} onPress={() => setNoDriverVisible(false)}>
           <Pressable style={styles.modalCard} onPress={() => {}}>
             <View style={styles.modalIcon}>
-              <Ionicons name="car-outline" size={26} color="#335CFF" />
+              <Ionicons name="alert-circle-outline" size={26} color="#335CFF" />
             </View>
             <Text style={styles.modalTitle}>No drivers available</Text>
             <Text style={styles.modalBody}>
@@ -780,6 +794,7 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
                     return `${quantity} × ₹${price} = ₹${(quantity * price).toFixed(2)}`;
                   })()}
                 </Text>
+                {renderProductPickHints(item)}
                 {isPrintItem(item) &&
                   (() => {
                     const meta = getPrintMeta(item);
@@ -1290,6 +1305,32 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666666',
     marginTop: 2,
+  },
+  itemPickMeta: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#1B5E20',
+    marginTop: 4,
+  },
+  barcodeHighlight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 6,
+    marginTop: 6,
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    backgroundColor: '#FFF3CD',
+    borderWidth: 1,
+    borderColor: '#FFECB5',
+  },
+  barcodeHighlightText: {
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+    color: '#7A4F01',
+    fontVariant: ['tabular-nums'],
   },
   printMeta: {
     fontSize: 12,

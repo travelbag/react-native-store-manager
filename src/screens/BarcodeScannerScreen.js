@@ -26,14 +26,20 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
     expectedBarcode,
     itemName,
     requiredQuantity = 1,
+    alreadyPickedQuantity = 0,
     scanWithCamera = false,
     storeId = null,
     inventoryId: inventoryIdParam = null,
     expiryDate: expiryDateParam = null,
   } = route.params || {};
+  const requiredQty = Math.max(1, Number(requiredQuantity ?? 1));
+  const initialPicked = Math.min(
+    requiredQty,
+    Math.max(0, Number(alreadyPickedQuantity ?? 0))
+  );
+
   const [scanned, setScanned] = useState(false);
-  const [pickedQuantity, setPickedQuantity] = useState(1);
-  const [showQuantitySelector, setShowQuantitySelector] = useState(false);
+  const [unitsScanned, setUnitsScanned] = useState(initialPicked);
   const [wedgeResume, setWedgeResume] = useState(0);
   const [checkingExpiry, setCheckingExpiry] = useState(false);
   const [expiredGate, setExpiredGate] = useState(null);
@@ -41,7 +47,7 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
   const scanLockRef = useRef(false);
   const successAlertOpenRef = useRef(false);
   const handleScannedValueRef = useRef(() => {});
-  const pendingConfirmRef = useRef(null);
+  const unitsScannedRef = useRef(initialPicked);
 
   // camera permissions (must run before wedge hook so `permission` is defined)
   const [permission, requestPermission] = useCameraPermissions();
@@ -54,15 +60,21 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
     resumeToken: wedgeResume,
   });
 
+  const unlockForNextUnit = useCallback(() => {
+    scanLockRef.current = false;
+    setScanned(false);
+    setCheckingExpiry(false);
+    setWedgeResume((k) => k + 1);
+  }, []);
+
   const resetScanner = () => {
     scanLockRef.current = false;
     successAlertOpenRef.current = false;
-    pendingConfirmRef.current = null;
     setCheckingExpiry(false);
     setExpiredGate(null);
     setScanned(false);
-    setPickedQuantity(1);
-    setShowQuantitySelector(false);
+    unitsScannedRef.current = initialPicked;
+    setUnitsScanned(initialPicked);
     setWedgeResume((k) => k + 1);
   };
 
@@ -145,76 +157,97 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
     ]
   );
 
-  const confirmScan = (quantity, scannedData) => {
-    if (successAlertOpenRef.current) {
-      return;
-    }
+  const finishLine = useCallback(
+    (quantity, scannedData) => {
+      if (successAlertOpenRef.current) {
+        return;
+      }
 
-    successAlertOpenRef.current = true;
-    showAppDialog(
-      'Item scanned',
-      `${itemName} was scanned successfully.`,
-      [
-        {
-          text: 'OK',
-          onPress: () => {
-            if (route.params.onScanSuccess) {
-              route.params.onScanSuccess(scannedData || expectedBarcode, quantity);
-            }
-            setTimeout(() => {
-              if (orderId) {
-                // Pop scanner off the stack. navigate(OrderPicking) can leave BarcodeScanner
-                // underneath, so Back would reopen the camera.
-                if (typeof navigation.canGoBack === 'function' && navigation.canGoBack()) {
+      successAlertOpenRef.current = true;
+      showAppDialog(
+        'Item scanned',
+        `${itemName} was scanned successfully.`,
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              if (route.params.onScanSuccess) {
+                route.params.onScanSuccess(scannedData || expectedBarcode, quantity);
+              }
+              setTimeout(() => {
+                if (orderId) {
+                  // Pop scanner off the stack. navigate(OrderPicking) can leave BarcodeScanner
+                  // underneath, so Back would reopen the camera.
+                  if (typeof navigation.canGoBack === 'function' && navigation.canGoBack()) {
+                    navigation.goBack();
+                  } else {
+                    navigation.navigate({
+                      name: 'OrderPicking',
+                      params: { orderId, scanSuccess: true },
+                      merge: true,
+                    });
+                  }
+                } else if (navigation.canGoBack && navigation.canGoBack()) {
                   navigation.goBack();
                 } else {
-                  navigation.navigate({
-                    name: 'OrderPicking',
-                    params: { orderId, scanSuccess: true },
-                    merge: true,
-                  });
+                  navigation.navigate('OrdersList');
                 }
-              } else if (navigation.canGoBack && navigation.canGoBack()) {
-                navigation.goBack();
-              } else {
-                navigation.navigate('OrdersList');
-              }
-            }, 200); // Delay navigation to allow the dialog to close
+              }, 200); // Delay navigation to allow the dialog to close
+            },
           },
-        },
-      ],
-      {
-        variant: 'success',
-        icon: 'checkmark-done',
-        cancelable: false,
-        highlight: {
-          icon: 'layers-outline',
-          label: 'Quantity picked',
-          value: requiredQuantity > 1 ? `${quantity} of ${requiredQuantity}` : String(quantity),
-        },
+        ],
+        {
+          variant: 'success',
+          icon: 'checkmark-done',
+          cancelable: false,
+          highlight: {
+            icon: 'layers-outline',
+            label: 'Quantity picked',
+            value: requiredQty > 1 ? `${quantity} of ${requiredQty}` : String(quantity),
+          },
+        }
+      );
+    },
+    [itemName, expectedBarcode, orderId, navigation, requiredQty, route.params]
+  );
+
+  const registerUnitScan = useCallback(
+    (scannedData) => {
+      const next = Math.min(requiredQty, unitsScannedRef.current + 1);
+      unitsScannedRef.current = next;
+      setUnitsScanned(next);
+
+      if (typeof route.params?.onScanProgress === 'function' && next < requiredQty) {
+        route.params.onScanProgress(scannedData || expectedBarcode, next);
       }
-    );
-  };
+
+      if (next >= requiredQty) {
+        finishLine(next, scannedData);
+        return;
+      }
+
+      Vibration.vibrate(60);
+      // Stay on this screen and require another physical scan for the next unit.
+      unlockForNextUnit();
+    },
+    [requiredQty, expectedBarcode, unlockForNextUnit, finishLine, route.params]
+  );
 
   const proceedAfterExpiryCheck = useCallback(
-    async (quantity, scannedData) => {
+    async (scannedData) => {
       setCheckingExpiry(true);
       try {
         const allowed = await ensureProductAllowedForScan(scannedData || expectedBarcode);
         if (!allowed) {
-          resetScanner();
+          unlockForNextUnit();
           return;
         }
-        if (requiredQuantity > 1 && quantity == null) {
-          setShowQuantitySelector(true);
-          return;
-        }
-        confirmScan(quantity ?? 1, scannedData);
+        registerUnitScan(scannedData);
       } finally {
         setCheckingExpiry(false);
       }
     },
-    [ensureProductAllowedForScan, expectedBarcode, requiredQuantity]
+    [ensureProductAllowedForScan, expectedBarcode, registerUnitScan, unlockForNextUnit]
   );
 
   const handleScannedValue = (rawData) => {
@@ -231,14 +264,14 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
     Vibration.vibrate();
 
     if (data === expectedBarcode) {
-      void proceedAfterExpiryCheck(requiredQuantity > 1 ? null : 1, data);
+      void proceedAfterExpiryCheck(data);
     } else {
       showAppDialog(
         'Wrong item',
         `This barcode doesn't match ${itemName}.`,
         [
           { text: 'Cancel', style: 'cancel', onPress: () => navigation.goBack() },
-          { text: 'Try Again', onPress: () => resetScanner() },
+          { text: 'Try Again', onPress: () => unlockForNextUnit() },
         ],
         {
           variant: 'error',
@@ -257,18 +290,6 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
 
   const handleBarCodeScanned = ({ data }) => {
     handleScannedValue(data);
-  };
-
-  const increaseQuantity = () => {
-    if (pickedQuantity < requiredQuantity) {
-      setPickedQuantity(pickedQuantity + 1);
-    }
-  };
-
-  const decreaseQuantity = () => {
-    if (pickedQuantity > 1) {
-      setPickedQuantity(pickedQuantity - 1);
-    }
   };
 
   useFocusEffect(
@@ -290,6 +311,8 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
       </SafeAreaView>
     );
   }
+
+  const remaining = Math.max(0, requiredQty - unitsScanned);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -330,10 +353,23 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
       ) : (
         <>
           <Text style={styles.instruction}>
-            {scanWithCamera
-              ? 'Point the camera at the barcode, or scan with your handheld scanner.'
-              : 'Use your handheld scanner, or point the camera at the barcode.'}
+            {requiredQty > 1
+              ? `Scan each unit separately — ${unitsScanned} of ${requiredQty} done${
+                  remaining > 0 ? `, ${remaining} left` : ''
+                }.`
+              : scanWithCamera
+                ? 'Point the camera at the barcode, or scan with your handheld scanner.'
+                : 'Use your handheld scanner, or point the camera at the barcode.'}
           </Text>
+
+          {requiredQty > 1 ? (
+            <View style={styles.progressBanner}>
+              <Ionicons name="layers-outline" size={18} color="#FFFFFF" />
+              <Text style={styles.progressBannerText}>
+                {unitsScanned}/{requiredQty} scanned
+              </Text>
+            </View>
+          ) : null}
 
           <View style={styles.scannerContainer}>
             <CameraView
@@ -363,32 +399,11 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
             ) : null}
           </View>
 
-          {showQuantitySelector && (
-            <View style={styles.quantityContainer}>
-              <Text style={styles.quantityTitle}>Select quantity</Text>
-              <View style={styles.quantityControls}>
-                <TouchableOpacity style={styles.qtyButton} onPress={decreaseQuantity}>
-                  <Ionicons name="remove" size={24} color="#FFFFFF" />
-                </TouchableOpacity>
-                <Text style={styles.quantityValue}>{pickedQuantity}</Text>
-                <TouchableOpacity style={styles.qtyButton} onPress={increaseQuantity}>
-                  <Ionicons name="add" size={24} color="#FFFFFF" />
-                </TouchableOpacity>
-              </View>
-              <TouchableOpacity
-                style={styles.confirmButton}
-                onPress={() => confirmScan(pickedQuantity, expectedBarcode)}
-              >
-                <Text style={styles.confirmButtonText}>Confirm</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {scanned && !showQuantitySelector && !checkingExpiry && (
-            <TouchableOpacity style={styles.rescanButton} onPress={resetScanner}>
-              <Text style={styles.rescanButtonText}>Scan Again</Text>
+          {scanned && !checkingExpiry && !successAlertOpenRef.current && remaining > 0 ? (
+            <TouchableOpacity style={styles.rescanButton} onPress={unlockForNextUnit}>
+              <Text style={styles.rescanButtonText}>Scan next unit</Text>
             </TouchableOpacity>
-          )}
+          ) : null}
         </>
       )}
 
@@ -401,7 +416,7 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
           const resolve = expiredGate?.resolve;
           setExpiredGate(null);
           resolve?.(false);
-          resetScanner();
+          unlockForNextUnit();
         }}
         onExpiryUpdated={() => {
           const resolve = expiredGate?.resolve;
@@ -449,6 +464,15 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     backgroundColor: 'rgba(0,0,0,0.6)',
   },
+  progressBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    backgroundColor: '#0F5132',
+  },
+  progressBannerText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
   scannerContainer: { flex: 1, position: 'relative' },
   scanner: { flex: 1 },
   overlay: {
@@ -472,36 +496,6 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   expiryCheckText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
-  quantityContainer: {
-    backgroundColor: '#1C1C1E',
-    padding: 20,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-  },
-  quantityTitle: { color: '#FFFFFF', fontSize: 16, fontWeight: '700', marginBottom: 12 },
-  quantityControls: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 24,
-    marginBottom: 16,
-  },
-  qtyButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#007AFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  quantityValue: { color: '#FFFFFF', fontSize: 28, fontWeight: '700', minWidth: 40, textAlign: 'center' },
-  confirmButton: {
-    backgroundColor: '#34C759',
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  confirmButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
   rescanButton: {
     margin: 16,
     backgroundColor: '#007AFF',
