@@ -12,6 +12,10 @@ import { apiClient } from '../services/apiClient';
 import { assignDriver, wasOrderAssigned } from '../services/DriverService';
 import { resolvePrintItemUrl } from '../utils/mediaUrl';
 import { toExpiryDateOnly } from '../utils/inventoryExpiry';
+import {
+  getUserFacingError,
+  showUserFacingErrorDialog,
+} from '../utils/userFacingError';
 import { useAuth } from './AuthContext';
 
 const OrdersContext = createContext();
@@ -71,9 +75,23 @@ const ASSIGNED_ORDER_STATUS_ALIASES = new Set([
   'intransit',
 ]);
 
+/** Backend often sends `confirmed` for brand-new orders; treat like pending for alerts + UI */
+export const isPendingNewOrderStatus = (status) => {
+  const s = normalizeStatusValue(status);
+  return (
+    s === '' ||
+    s === 'pending' ||
+    s === 'confirmed' ||
+    s === 'new' ||
+    s === 'placed' ||
+    s === 'received'
+  );
+};
+
 const canonicalizeOrderStatus = (value) => {
   const s = normalizeStatusValue(value);
   if (!s) return ORDER_STATUS.PENDING;
+  if (isPendingNewOrderStatus(s)) return ORDER_STATUS.PENDING;
   if (ASSIGNED_ORDER_STATUS_ALIASES.has(s)) return ORDER_STATUS.ASSIGNED;
   // Store pickup completion is terminal — surface as Delivered in the UI.
   if (s === 'pickedup' || s === 'picked_up') return ORDER_STATUS.COMPLETED;
@@ -109,19 +127,6 @@ export const isPickupCompletedOrder = (order = {}) => {
   if (!isPickupFulfillmentOrder(order)) return false;
   const status = canonicalizeOrderStatus(rawStatus);
   return status === ORDER_STATUS.COMPLETED || status === 'picked_up';
-};
-
-/** Backend often sends `confirmed` for brand-new orders; treat like pending for alerts */
-const isPendingNewOrderStatus = (status) => {
-  const s = normalizeStatusValue(status);
-  return (
-    s === '' ||
-    s === 'pending' ||
-    s === 'confirmed' ||
-    s === 'new' ||
-    s === 'placed' ||
-    s === 'received'
-  );
 };
 
 const buildSocketBaseUrl = () => {
@@ -435,12 +440,17 @@ export function OrdersProvider({ children }) {
   const ordersRef = React.useRef([]);
   const [isAppActive, setIsAppActive] = React.useState(true);
   const consecutiveFailuresRef = React.useRef(0);
+  const socketConnectedRef = React.useRef(false);
+  /** Avoid spamming connection dialogs during background poll outages */
+  const lastSyncErrorDialogAtRef = React.useRef(0);
   const appStateRef = React.useRef(AppState.currentState);
   const isFetchingRef = React.useRef(false);
   const lastFetchAtRef = React.useRef(0);
   /** orderId -> last successfully merged time (dedupes duplicate push bursts) */
   const groceryOrderHandledAtRef = React.useRef(new Map());
   const groceryOrderFetchInFlightRef = React.useRef(new Set());
+  /** orderId -> timestamp: optimistic rows from push/socket not yet in server snapshot */
+  const optimisticPendingOrderAtRef = React.useRef(new Map());
   const handleNewOrderNotificationRef = React.useRef(null);
   /** null until first list snapshot; then Set of order ids last seen from fetch/poll */
   const previousPollOrderIdsRef = React.useRef(null);
@@ -773,12 +783,45 @@ export function OrdersProvider({ children }) {
 
   const lastSnapshotSignatureRef = React.useRef('');
 
+  const markOptimisticPendingOrder = React.useCallback((orderId) => {
+    const id = normalizeValue(orderId);
+    if (!id) return;
+    optimisticPendingOrderAtRef.current.set(id, Date.now());
+  }, []);
+
+  const clearOptimisticPendingOrder = React.useCallback((orderId) => {
+    const id = normalizeValue(orderId);
+    if (!id) return;
+    optimisticPendingOrderAtRef.current.delete(id);
+  }, []);
+
   const applyOrdersSnapshot = React.useCallback(
     (orders) => {
-      const ids = new Set(orders.map((o) => String(o.orderId ?? o.id ?? '')));
+      const serverIds = new Set(orders.map((o) => String(o.orderId ?? o.id ?? '')));
+      const now = Date.now();
+      const OPTIMISTIC_TTL_MS = 90000;
+
+      for (const [oid, addedAt] of optimisticPendingOrderAtRef.current.entries()) {
+        if (serverIds.has(oid) || now - addedAt > OPTIMISTIC_TTL_MS) {
+          optimisticPendingOrderAtRef.current.delete(oid);
+        }
+      }
+
+      const preservedLocal = (ordersRef.current || []).filter((order) => {
+        const oid = String(order.orderId ?? order.id ?? '');
+        if (!oid || serverIds.has(oid)) return false;
+        if (!isPendingNewOrderStatus(order.status ?? order.orderStatus)) return false;
+        const optimisticAt = optimisticPendingOrderAtRef.current.get(oid);
+        const fetchInFlight = groceryOrderFetchInFlightRef.current.has(oid);
+        return fetchInFlight || optimisticAt != null;
+      });
+
+      const mergedOrders = preservedLocal.length > 0 ? [...orders, ...preservedLocal] : orders;
+
+      const ids = new Set(mergedOrders.map((o) => String(o.orderId ?? o.id ?? '')));
       const prev = previousPollOrderIdsRef.current;
       if (prev !== null) {
-        for (const order of orders) {
+        for (const order of mergedOrders) {
           const oid = String(order.orderId ?? order.id ?? '');
           if (prev.has(oid)) continue;
           if (isPendingNewOrderStatus(order.status ?? order.orderStatus)) {
@@ -788,7 +831,7 @@ export function OrdersProvider({ children }) {
         }
       }
       previousPollOrderIdsRef.current = ids;
-      const signature = orders
+      const signature = mergedOrders
         .map((order) => {
           const id = String(order.orderId ?? order.id ?? '');
           const status = String(order.status ?? order.orderStatus ?? '');
@@ -800,7 +843,7 @@ export function OrdersProvider({ children }) {
         return;
       }
       lastSnapshotSignatureRef.current = signature;
-      dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
+      dispatch({ type: ACTIONS.SET_ORDERS, payload: mergedOrders });
     },
     [schedulePendingOrderSoundAlert, emitNewOrderReceived],
   );
@@ -808,21 +851,25 @@ export function OrdersProvider({ children }) {
   const fetchOrdersFromDB = React.useCallback(
     async (status = null, source = 'manual') => {
       if (!manager || !manager.storeId) {
-        console.error('❌ No storeId found for manager');
-        return [];
+        console.warn('⚠️ No storeId found for manager');
+        return { ok: false, orders: null, error: 'no_store' };
       }
       let endpoint = `/orders/by-store/${manager.storeId}`;
       if (status) endpoint += `?status=${status}`;
       try {
-        const response = await apiClient.get(endpoint);
+        const response = await apiClient.get(endpoint, {
+          timeoutMs: API_CONFIG.ORDERS_REQUEST_TIMEOUT_MS,
+          retryAttempts: API_CONFIG.ORDERS_RETRY_ATTEMPTS,
+        });
         const rawText = await response.text();
         if (!response.ok) {
-          console.error('❌ Failed to fetch orders from DB:', {
+          console.warn('⚠️ Failed to fetch orders:', {
             endpoint,
             status: response.status,
             body: rawText?.slice(0, 300) || '',
+            source,
           });
-          return [];
+          return { ok: false, orders: null, error: `http_${response.status}` };
         }
         if (!rawText || !rawText.trim()) {
           console.warn('⚠️ Orders API returned empty response body', {
@@ -830,32 +877,104 @@ export function OrdersProvider({ children }) {
             status: response.status,
             source,
           });
-          return [];
+          return { ok: false, orders: null, error: 'empty_body' };
         }
         let data;
         try {
           data = JSON.parse(rawText);
         } catch (parseError) {
-          console.error('❌ Orders API returned invalid JSON:', {
+          console.warn('⚠️ Orders API returned invalid JSON:', {
             endpoint,
             status: response.status,
             body: rawText.slice(0, 300),
             parseError: parseError?.message || parseError,
+            source,
           });
-          return [];
+          return { ok: false, orders: null, error: 'invalid_json' };
         }
 
         const rawOrders = data.orders || data || [];
         const normalized = Array.isArray(rawOrders)
           ? rawOrders.map(normalizeOrder).filter(Boolean)
           : [];
-        return normalized.filter(isOrderVisibleToManager);
+        return {
+          ok: true,
+          orders: normalized.filter(isOrderVisibleToManager),
+          error: null,
+        };
       } catch (error) {
-        console.error('❌ Error fetching orders from DB:', error);
-        return [];
+        // Use warn so Expo LogBox does not show a technical red toast to store staff.
+        console.warn('⚠️ Unable to fetch orders:', error?.message || error);
+        return {
+          ok: false,
+          orders: null,
+          error: String(error?.message || error || 'network_error'),
+        };
       }
     },
     [manager, normalizeOrder, isOrderVisibleToManager],
+  );
+
+  const getPollDelayMs = React.useCallback(() => {
+    const baseInterval = socketConnectedRef.current
+      ? API_CONFIG.POLL_INTERVAL_SOCKET
+      : API_CONFIG.POLL_INTERVAL;
+    const failures = consecutiveFailuresRef.current;
+    if (failures <= 0) {
+      return baseInterval;
+    }
+    return Math.min(
+      API_CONFIG.POLL_BACKOFF_MAX_MS,
+      baseInterval * 2 ** Math.min(failures - 1, 4),
+    );
+  }, []);
+
+  const syncOrdersFromServer = React.useCallback(
+    async (status = null, source = 'manual') => {
+      const result = await fetchOrdersFromDB(status, source);
+      if (result.ok) {
+        consecutiveFailuresRef.current = 0;
+        applyOrdersSnapshot(result.orders);
+        dispatch({ type: ACTIONS.SET_ERROR, payload: null });
+        return { ok: true, orders: result.orders };
+      }
+
+      consecutiveFailuresRef.current += 1;
+      const facing = getUserFacingError(result.error, { action: 'load orders' });
+      const bannerMessage =
+        facing.kind === 'network' || facing.kind === 'timeout'
+          ? facing.message
+          : `${facing.message} Pull down to retry.`;
+
+      dispatch({
+        type: ACTIONS.SET_ERROR,
+        payload: bannerMessage,
+      });
+
+      const shouldNotifyUser =
+        source === 'manual' ||
+        source === 'initial' ||
+        consecutiveFailuresRef.current === 1;
+      const now = Date.now();
+      const dialogCooldownMs = 60000;
+      if (
+        shouldNotifyUser &&
+        now - lastSyncErrorDialogAtRef.current > dialogCooldownMs
+      ) {
+        lastSyncErrorDialogAtRef.current = now;
+        showUserFacingErrorDialog(result.error, { action: 'load orders' });
+      } else {
+        console.warn('⚠️ Order sync failed; keeping last known orders', {
+          source,
+          error: result.error,
+          failures: consecutiveFailuresRef.current,
+        });
+      }
+
+      const cachedOrders = ordersRef.current || [];
+      return { ok: false, orders: cachedOrders, error: result.error };
+    },
+    [applyOrdersSnapshot, fetchOrdersFromDB],
   );
 
   const refreshOrders = React.useCallback(
@@ -866,15 +985,15 @@ export function OrdersProvider({ children }) {
         if (!force && now - lastFetchAtRef.current < 1500) {
           return ordersRef.current;
         }
-        const orders = await fetchOrdersFromDB(status, 'manual');
-        applyOrdersSnapshot(orders);
-        return orders;
+        const result = await syncOrdersFromServer(status, 'manual');
+        lastFetchAtRef.current = Date.now();
+        return result.orders;
       } catch (e) {
         console.warn('⚠️ Failed to refresh orders:', e);
-        return [];
+        return ordersRef.current;
       }
     },
-    [applyOrdersSnapshot, fetchOrdersFromDB],
+    [syncOrdersFromServer],
   );
 
   useEffect(() => {
@@ -899,30 +1018,21 @@ export function OrdersProvider({ children }) {
       pollTimeoutRef.current = setTimeout(async () => {
         if (cancelled) return;
         if (isFetchingRef.current) {
-          // If a fetch is in progress, reschedule to avoid overlap
           schedulePoll();
           return;
         }
         isFetchingRef.current = true;
         try {
-          const orders = await fetchOrdersFromDB(null, 'interval');
           if (cancelled) return;
-          consecutiveFailuresRef.current = 0; // reset failures on success
-          applyOrdersSnapshot(orders);
-        } catch (e) {
-          consecutiveFailuresRef.current += 1;
-          if (consecutiveFailuresRef.current >= 5) {
-            console.warn('🛑 Stopping polling after repeated failures (server likely down).');
-            stopTimers();
-            return; // do not reschedule
-          }
+          await syncOrdersFromServer(null, 'interval');
         } finally {
           lastFetchAtRef.current = Date.now();
           isFetchingRef.current = false;
-          // Reschedule next tick
-          schedulePoll();
+          if (!cancelled) {
+            schedulePoll();
+          }
         }
-      }, API_CONFIG.POLL_INTERVAL);
+      }, getPollDelayMs());
     };
 
     if (isAuthenticated && manager?.storeId && isAppActive) {
@@ -940,13 +1050,7 @@ export function OrdersProvider({ children }) {
           console.warn('⚠️ initializeNotifications failed:', e?.message ?? e);
         }
         if (cancelled) return;
-        try {
-          const orders = await fetchOrdersFromDB(null, 'initial');
-          if (cancelled) return;
-          applyOrdersSnapshot(orders);
-        } catch (e) {
-          console.warn('⚠️ Initial orders fetch failed:', e?.message ?? e);
-        }
+        await syncOrdersFromServer(null, 'initial');
         if (cancelled) return;
         schedulePoll();
       })();
@@ -963,7 +1067,7 @@ export function OrdersProvider({ children }) {
       cancelled = true;
       stopTimers();
     };
-  }, [isAuthenticated, manager?.storeId, isAppActive, applyOrdersSnapshot, fetchOrdersFromDB]);
+  }, [isAuthenticated, manager?.storeId, isAppActive, syncOrdersFromServer, getPollDelayMs]);
 
   // Observe app state to pause polling when app goes to background/inactive
   useEffect(() => {
@@ -1146,11 +1250,13 @@ export function OrdersProvider({ children }) {
         id: eventOrderId,
         status: payload.status ?? payload.orderStatus ?? 'confirmed',
       });
+      markOptimisticPendingOrder(eventOrderId);
       dispatch({ type: ACTIONS.ADD_ORDER, payload: normalized });
       if (previousPollOrderIdsRef.current) {
         previousPollOrderIdsRef.current.add(eventOrderId);
       }
       if (!alreadyVisible) {
+        schedulePendingOrderSoundAlert(normalized);
         emitNewOrderReceived(normalized, 'socket');
       }
     };
@@ -1177,16 +1283,29 @@ export function OrdersProvider({ children }) {
       });
     };
 
-    socketClient.on('connect', joinStoreRooms);
+    const handleSocketConnect = () => {
+      socketConnectedRef.current = true;
+      joinStoreRooms();
+    };
+    const handleSocketDisconnect = () => {
+      socketConnectedRef.current = false;
+    };
+
+    socketClient.on('connect', handleSocketConnect);
+    socketClient.on('disconnect', handleSocketDisconnect);
     socketClient.on('new-order', handleNewOrder);
     socketClient.on('order-updated', handleOrderUpdated);
     socketClient.on('order_cancelled', handleOrderCancelled);
     socketClient.on('order_assigned', handleOrderAssigned);
     socketClient.on('order_assignment_returned', handleOrderAssignmentReturned);
-    joinStoreRooms();
+    if (socketClient.connected) {
+      handleSocketConnect();
+    }
 
     return () => {
-      socketClient.off('connect', joinStoreRooms);
+      socketConnectedRef.current = false;
+      socketClient.off('connect', handleSocketConnect);
+      socketClient.off('disconnect', handleSocketDisconnect);
       socketClient.off('new-order', handleNewOrder);
       socketClient.off('order-updated', handleOrderUpdated);
       socketClient.off('order_cancelled', handleOrderCancelled);
@@ -1197,7 +1316,7 @@ export function OrdersProvider({ children }) {
         socketRef.current = null;
       }
     };
-  }, [dispatch, emitNewOrderReceived, isAuthenticated, manager?.storeId, normalizeOrder]);
+  }, [dispatch, emitNewOrderReceived, isAuthenticated, manager?.storeId, normalizeOrder, markOptimisticPendingOrder, schedulePendingOrderSoundAlert]);
 
   // Helpers to control sync polling manually (exposed via context for advanced control)
   const stopSyncPolling = () => {
@@ -1208,33 +1327,22 @@ export function OrdersProvider({ children }) {
   };
 
   const startSyncPolling = () => {
-    // Prefer timeout-based scheduler
     if (isAuthenticated && manager?.storeId && isAppActive) {
       if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
       pollTimeoutRef.current = setTimeout(async function scheduleManualStart() {
         if (isFetchingRef.current) {
-          pollTimeoutRef.current = setTimeout(scheduleManualStart, API_CONFIG.POLL_INTERVAL);
+          pollTimeoutRef.current = setTimeout(scheduleManualStart, getPollDelayMs());
           return;
         }
         isFetchingRef.current = true;
         try {
-          const orders = await fetchOrdersFromDB(null, 'interval');
-          consecutiveFailuresRef.current = 0;
-          applyOrdersSnapshot(orders);
-        } catch (e) {
-          consecutiveFailuresRef.current += 1;
-          if (consecutiveFailuresRef.current >= 5) {
-            console.warn('🛑 Stopping polling after repeated failures (server likely down).');
-            clearTimeout(pollTimeoutRef.current);
-            pollTimeoutRef.current = null;
-            return;
-          }
+          await syncOrdersFromServer(null, 'interval');
         } finally {
           lastFetchAtRef.current = Date.now();
           isFetchingRef.current = false;
-          pollTimeoutRef.current = setTimeout(scheduleManualStart, API_CONFIG.POLL_INTERVAL);
+          pollTimeoutRef.current = setTimeout(scheduleManualStart, getPollDelayMs());
         }
-      }, API_CONFIG.POLL_INTERVAL);
+      }, getPollDelayMs());
     }
   };
   const initializeNotifications = async () => {
@@ -1303,7 +1411,7 @@ export function OrdersProvider({ children }) {
       }
     
     } catch (error) {
-      console.error('Failed to initialize notifications:', error);
+      console.warn('Failed to initialize notifications:', error);
     }
   };
 
@@ -1323,7 +1431,7 @@ export function OrdersProvider({ children }) {
   // Register store manager token with backend
   const registerStoreManagerToken = async (pushToken) => {
     if (!manager) {
-      console.error('❌ No manager data available for token registration');
+      console.warn('⚠️ No manager data available for token registration');
       return null;
     }
 
@@ -1334,14 +1442,12 @@ export function OrdersProvider({ children }) {
 
       const response = await apiClient.post(endpoint, {
         body: {
-          storeManagerId: manager.id,
           storeId: manager.storeId,
-          pushToken: pushToken,
-          deviceInfo: {
-            platform: Platform.OS,
-            timestamp: new Date().toISOString(),
-          },
+          pushToken,
+          platform: Platform.OS,
         },
+        timeoutMs: 20000,
+        retryAttempts: 2,
       });
 
       if (response.ok) {
@@ -1351,13 +1457,13 @@ export function OrdersProvider({ children }) {
       } else {
         // Don't log 401 errors - the fetch interceptor handles logout
         if (response.status !== 401) {
-          console.error('❌ Failed to register token:', response.status);
+          console.warn('⚠️ Failed to register token:', response.status);
         }
         return null;
       }
     } catch (error) {
       // Silent on network errors during logout flow
-      console.error('❌ Error registering token:', error);
+      console.warn('⚠️ Error registering token:', error);
       return null;
     }
   };
@@ -1386,6 +1492,7 @@ export function OrdersProvider({ children }) {
           storeId: notificationData.storeId || notificationData.targetStoreId,
           timestamp: notificationData.timestamp || new Date().toISOString(),
         });
+        markOptimisticPendingOrder(orderId);
         dispatch({ type: ACTIONS.ADD_ORDER, payload: optimistic });
         if (previousPollOrderIdsRef.current) {
           previousPollOrderIdsRef.current.add(orderId);
@@ -1408,13 +1515,14 @@ export function OrdersProvider({ children }) {
       console.log('📦 New order details fetched:', orderDetails);
       if (orderDetails) {
         groceryOrderHandledAtRef.current.set(orderId, Date.now());
+        clearOptimisticPendingOrder(orderId);
         dispatch({ type: ACTIONS.ADD_ORDER, payload: orderDetails });
         if (previousPollOrderIdsRef.current) {
           previousPollOrderIdsRef.current.add(String(orderId));
         }
       }
     } catch (error) {
-      console.error('Error handling new order notification:', error);
+      console.warn('Error handling new order notification:', error);
     }
   };
   handleNewOrderNotificationRef.current = handleNewOrderNotification;
@@ -1435,7 +1543,7 @@ export function OrdersProvider({ children }) {
           try {
             items = JSON.parse(orderRaw.items);
           } catch (e) {
-            console.error('❌ Error parsing items JSON:', e);
+            console.warn('⚠️ Error parsing items JSON:', e);
             items = [];
           }
         } else if (Array.isArray(orderRaw.items)) {
@@ -1447,11 +1555,11 @@ export function OrdersProvider({ children }) {
         console.log('📦 Order details mapped:', orderData);
         return orderData;
       } else {
-        console.error('❌ Failed to fetch order details:', response.status);
+        console.warn('⚠️ Failed to fetch order details:', response.status);
         return null;
       }
     } catch (error) {
-      console.error('❌ Error fetching order details:', error);
+      console.warn('⚠️ Error fetching order details:', error?.message || error);
       return null;
     }
   };
@@ -1500,14 +1608,14 @@ export function OrdersProvider({ children }) {
         refreshOrders();
         return true;
       } else {
-        console.error('❌ Failed to accept order in backend:', response.status);
-        console.error('❌ Error details:', responseData);
-        // Don't mutate local state on failure to avoid divergence
+        console.warn('⚠️ Failed to accept order:', response.status, responseData);
+        const serverMessage = responseData?.message || responseData?.error || `http_${response.status}`;
+        await showUserFacingErrorDialog(serverMessage, { action: 'accept this order' });
         return false;
       }
     } catch (error) {
-      console.error('❌ Error accepting order:', error);
-      // Avoid local state change on failure
+      console.warn('⚠️ Error accepting order:', error?.message || error);
+      await showUserFacingErrorDialog(error, { action: 'accept this order' });
       return false;
     }
   };
@@ -1584,8 +1692,7 @@ export function OrdersProvider({ children }) {
       }
     }
     try {
-      const orders = await fetchOrdersFromDB();
-      applyOrdersSnapshot(orders);
+      await syncOrdersFromServer(null, 'manual');
     } catch (fetchError) {
       console.warn('⚠️ Failed to refresh orders after mark ready:', fetchError);
     }
@@ -1641,25 +1748,28 @@ export function OrdersProvider({ children }) {
     };
     dispatch({ type: ACTIONS.ADD_ORDER, payload: deliveredPickupOrder });
     try {
-      const orders = await fetchOrdersFromDB();
-      const orderKey = String(orderId);
-      const fromApi = orders.find(
-        (o) => String(o.id ?? o.orderId ?? '') === orderKey
-      );
-      if (!fromApi) {
-        applyOrdersSnapshot([deliveredPickupOrder, ...orders]);
-      } else {
-        applyOrdersSnapshot(
-          orders.map((o) =>
-            String(o.id ?? o.orderId ?? '') === orderKey
-              ? {
-                  ...o,
-                  ...deliveredPickupOrder,
-                  items: o.items?.length ? o.items : deliveredPickupOrder.items,
-                }
-              : o
-          )
+      const syncResult = await syncOrdersFromServer(null, 'manual');
+      if (syncResult.ok) {
+        const orders = syncResult.orders;
+        const orderKey = String(orderId);
+        const fromApi = orders.find(
+          (o) => String(o.id ?? o.orderId ?? '') === orderKey
         );
+        if (!fromApi) {
+          applyOrdersSnapshot([deliveredPickupOrder, ...orders]);
+        } else {
+          applyOrdersSnapshot(
+            orders.map((o) =>
+              String(o.id ?? o.orderId ?? '') === orderKey
+                ? {
+                    ...o,
+                    ...deliveredPickupOrder,
+                    items: o.items?.length ? o.items : deliveredPickupOrder.items,
+                  }
+                : o
+            )
+          );
+        }
       }
     } catch (fetchError) {
       console.warn('Failed to refresh orders after pickup completion:', fetchError);
@@ -1679,14 +1789,20 @@ export function OrdersProvider({ children }) {
       
       if (response.ok) {
         console.log('✅ Order rejected successfully in backend');
-      } else {
-        console.error('❌ Failed to reject order in backend:', response.status);
+        updateOrderStatus(orderId, ORDER_STATUS.REJECTED);
+        return true;
       }
+
+      console.warn('⚠️ Failed to reject order:', response.status);
+      await showUserFacingErrorDialog(`http_${response.status}`, {
+        action: 'reject this order',
+      });
+      return false;
     } catch (error) {
-      console.error('❌ Error rejecting order:', error);
+      console.warn('⚠️ Error rejecting order:', error?.message || error);
+      await showUserFacingErrorDialog(error, { action: 'reject this order' });
+      return false;
     }
-    // Update frontend state
-    updateOrderStatus(orderId, ORDER_STATUS.REJECTED);
   };
 
   const updateItemStatus = (orderId, itemId, status, scannedAt = null, pickedQuantity = null) => {
@@ -1725,7 +1841,7 @@ export function OrdersProvider({ children }) {
       } catch {}
       return updated;
     } catch (e) {
-      console.error('❌ Failed to persist item scan:', e.message);
+      console.warn('⚠️ Failed to persist item scan:', e.message);
       throw e;
     }
   };
@@ -1764,7 +1880,7 @@ export function OrdersProvider({ children }) {
    */
   const completePickingAndAssignDriver = async (orderId, packageRack, options = {}) => {
     if (!orderId) {
-      console.error('❌ completePickingAndAssignDriver: missing orderId');
+      console.warn('⚠️ completePickingAndAssignDriver: missing orderId');
       throw new Error('Order ID is required');
     }
     if (!packageRack) {
@@ -1825,8 +1941,7 @@ export function OrdersProvider({ children }) {
       }
     }
     try {
-      const orders = await fetchOrdersFromDB();
-      applyOrdersSnapshot(orders);
+      await syncOrdersFromServer(null, 'manual');
     } catch (fetchError) {
       console.warn('⚠️ Failed to refresh orders after assign:', fetchError);
     }

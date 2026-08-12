@@ -13,6 +13,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useOrders, ORDER_STATUS, ITEM_STATUS, isPickupFulfillmentOrder, isPickupCompletedOrder } from '../context/OrdersContext';
 import { showAppDialog } from '../context/DialogContext';
+import { showUserFacingErrorDialog } from '../utils/userFacingError';
 import {
   isNoRacksAvailableError,
   resolveAssignedPackoutRack,
@@ -144,8 +145,8 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
     navigation.navigate('OrdersList', { selectedTab: ORDER_STATUS.ACCEPTED });
   };
 
-  const handleReject = () => {
-    rejectOrder(orderId);
+  const handleReject = async () => {
+    await rejectOrder(orderId);
   };
 
   const handleStartPicking = async () => {
@@ -223,7 +224,7 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
       if (isNoDriverError) {
         setNoDriverVisible(true);
       } else {
-        showAppDialog("Couldn't mark ready", message, undefined, { variant: 'error' });
+        await showUserFacingErrorDialog(error, { action: 'mark this order ready' });
       }
     } finally {
       setIsAssigningDriver(false);

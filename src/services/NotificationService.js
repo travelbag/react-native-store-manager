@@ -128,7 +128,7 @@ class NotificationService {
           console.warn('⚠️ Network error getting push token - working offline');
           console.log('💡 Push notifications will work once network is restored');
         } else {
-          console.error('❌ Error getting push token:', e.message || e);
+          console.warn('⚠️ Error getting push token:', e.message || e);
         }
         
         // Create a local token for development/offline mode

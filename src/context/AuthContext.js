@@ -11,6 +11,7 @@ import {
   writeAuthSession,
 } from '../auth/authSession';
 import { apiClient } from '../services/apiClient';
+import { getUserFacingError } from '../utils/userFacingError';
 
 const AuthContext = createContext();
 
@@ -99,7 +100,7 @@ export function AuthProvider({ children, logoutHandlerRef }) {
         }
       }
     } catch (error) {
-      console.error('Error hydrating auth:', error);
+      console.warn('Error hydrating auth:', error?.message || error);
     } finally {
       dispatch({ type: AUTH_ACTIONS.SET_LOADING, payload: false });
     }
@@ -152,10 +153,18 @@ export function AuthProvider({ children, logoutHandlerRef }) {
       dispatch({ type: AUTH_ACTIONS.SET_ERROR, payload: errorMessage });
       return { success: false, error: errorMessage };
     } catch (error) {
-      console.error('Login error:', error);
-      const errorMessage = 'Network error. Please check your connection.';
+      console.warn('Login error:', error?.message || error);
+      const facing = getUserFacingError(error, { action: 'sign in' });
+      const errorMessage =
+        facing.kind === 'network' || facing.kind === 'timeout'
+          ? facing.message
+          : 'Unable to sign in. Please try again.';
       dispatch({ type: AUTH_ACTIONS.SET_ERROR, payload: errorMessage });
-      return { success: false, error: errorMessage };
+      return {
+        success: false,
+        error: errorMessage,
+        errorTitle: facing.title,
+      };
     } finally {
       dispatch({ type: AUTH_ACTIONS.SET_LOADING, payload: false });
     }

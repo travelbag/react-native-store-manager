@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useOrders, ORDER_STATUS, isPickupFulfillmentOrder, isPickupReadyOrder, isPickupCompletedOrder } from '../context/OrdersContext';
+import { useOrders, ORDER_STATUS, isPickupFulfillmentOrder, isPickupReadyOrder, isPickupCompletedOrder, isPendingNewOrderStatus } from '../context/OrdersContext';
 import { useAuth } from '../context/AuthContext';
 import OrderCard from '../components/OrderCard';
 import { showAppDialog } from '../context/DialogContext';
@@ -17,7 +17,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { AppState } from 'react-native';
 
 const OrdersScreen = ({ route, navigation }) => {
-  const { orders, loading, refreshOrders } = useOrders();
+  const { orders, loading, error, refreshOrders } = useOrders();
   const { manager } = useAuth();
   const [selectedFilter, setSelectedFilter] = useState(ORDER_STATUS.PENDING);
   const [refreshing, setRefreshing] = useState(false);
@@ -78,11 +78,14 @@ const OrdersScreen = ({ route, navigation }) => {
     return s === 'accepted' || s === ORDER_STATUS.READY;
   };
 
+  const isPendingTabOrder = (order) =>
+    isPendingNewOrderStatus(order?.status ?? order?.orderStatus);
+
   const filters = [
     { 
       key: ORDER_STATUS.PENDING, 
       label: 'Pending', 
-      count: safeOrders.filter(o => normalizeStatus(o.status ?? o.orderStatus) === 'pending').length 
+      count: safeOrders.filter(isPendingTabOrder).length 
     },
     { 
       key: ORDER_STATUS.ACCEPTED, 
@@ -121,6 +124,9 @@ const OrdersScreen = ({ route, navigation }) => {
   const filteredOrders = safeOrders.filter(order => {
     const orderStatus = normalizeStatus(order.status ?? order.orderStatus);
     const filter = normalizeStatus(selectedFilter);
+    if (filter === normalizeStatus(ORDER_STATUS.PENDING)) {
+      return isPendingTabOrder(order);
+    }
     if (filter === normalizeStatus(ORDER_STATUS.PICKUP_AT_STORE)) {
       return isPickupReadyOrder(order);
     }
@@ -231,6 +237,13 @@ const OrdersScreen = ({ route, navigation }) => {
         />
       </View>
 
+      {error ? (
+        <View style={styles.syncWarningBanner}>
+          <Ionicons name="cloud-offline-outline" size={16} color="#9A6700" style={styles.syncWarningIcon} />
+          <Text style={styles.syncWarningText}>{error}</Text>
+        </View>
+      ) : null}
+
       <FlatList
         key={selectedFilter}
         data={filteredOrders}
@@ -285,6 +298,25 @@ const styles = StyleSheet.create({
   },
   filtersContent: {
     paddingHorizontal: 16,
+  },
+  syncWarningBanner: {
+    backgroundColor: '#FFF4E5',
+    borderBottomWidth: 1,
+    borderBottomColor: '#FFD699',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  syncWarningIcon: {
+    marginTop: 1,
+  },
+  syncWarningText: {
+    color: '#9A6700',
+    fontSize: 13,
+    fontWeight: '500',
+    flex: 1,
   },
   filterButton: {
     flexDirection: 'row',

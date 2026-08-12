@@ -46,9 +46,15 @@ export const API_CONFIG = {
   // Demo mode - set to false in production
   DEMO_MODE: true,
   DEMO_INTERVAL: 45000, // 45 seconds
-  // Polling interval for foreground order sync (ms)
-  // Reduced from 10000 -> 5000 to achieve ~5s polling cadence
-  POLL_INTERVAL: 5000,
+  // Foreground order sync when realtime socket is unavailable (ms)
+  POLL_INTERVAL: 10000,
+  // Slower backup poll when socket.io is connected and healthy
+  POLL_INTERVAL_SOCKET: 45000,
+  // Cap for exponential backoff after repeated sync failures (ms)
+  POLL_BACKOFF_MAX_MS: 60000,
+  // Orders list can be heavy — allow more time and retries than default API calls
+  ORDERS_REQUEST_TIMEOUT_MS: 35000,
+  ORDERS_RETRY_ATTEMPTS: 2,
 };
 
 if (__DEV__) {

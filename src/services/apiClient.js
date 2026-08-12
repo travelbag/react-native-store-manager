@@ -8,6 +8,21 @@ import {
 const isAbsoluteUrl = (value) => /^https?:\/\//i.test(value);
 const DEFAULT_TIMEOUT_MS = 15000;
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isRetryableStatus = (status) =>
+  status === 408 || status === 429 || status === 502 || status === 503 || status === 504;
+
+const isRetryableRequestError = (error) => {
+  const message = String(error?.message || '').toLowerCase();
+  return (
+    message.includes('request timed out') ||
+    message.includes('network request failed') ||
+    message.includes('failed to fetch') ||
+    message.includes('network error')
+  );
+};
+
 const isJsonBody = (body) =>
   body &&
   typeof body === 'object' &&
@@ -63,7 +78,10 @@ async function request(endpoint, options = {}) {
     requiresAuth = true,
     retryOn401 = true,
     timeoutMs = DEFAULT_TIMEOUT_MS,
+    retryAttempts = 0,
+    retryDelayMs = 1000,
     _hasRetried = false,
+    _retryCount = 0,
     ...rest
   } = options;
 
@@ -112,18 +130,36 @@ async function request(endpoint, options = {}) {
           requiresAuth,
           retryOn401,
           timeoutMs,
+          retryAttempts,
+          retryDelayMs,
           _hasRetried: true,
+          _retryCount,
         });
       }
     }
 
-    return response;
-  } catch (error) {
-    if (error?.name === 'AbortError') {
-      throw new Error('Request timed out');
+    if (isRetryableStatus(response.status) && _retryCount < retryAttempts) {
+      await sleep(retryDelayMs * (_retryCount + 1));
+      return request(endpoint, {
+        ...options,
+        _retryCount: _retryCount + 1,
+      });
     }
 
-    throw error;
+    return response;
+  } catch (error) {
+    const normalizedError =
+      error?.name === 'AbortError' ? new Error('Request timed out') : error;
+
+    if (_retryCount < retryAttempts && isRetryableRequestError(normalizedError)) {
+      await sleep(retryDelayMs * (_retryCount + 1));
+      return request(endpoint, {
+        ...options,
+        _retryCount: _retryCount + 1,
+      });
+    }
+
+    throw normalizedError;
   } finally {
     if (timeoutId) {
       clearTimeout(timeoutId);

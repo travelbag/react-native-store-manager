@@ -37,6 +37,7 @@ import { resolvePickExpiryState } from '../utils/resolvePickExpiry';
 import { getItemExpiryValue, getInventoryExpiryAlert } from '../utils/inventoryExpiry';
 import { confirmAppDialog, showAppDialog } from '../context/DialogContext';
 import { confirmExpiringSoonPick } from '../utils/expiryDialog';
+import { showUserFacingErrorDialog } from '../utils/userFacingError';
 import {
   isNoRacksAvailableError,
   resolveAssignedPackoutRack,
@@ -553,10 +554,7 @@ const OrderPicking = ({ route, navigation }) => {
       await Print.printAsync({ uri: localUri });
       await markPrintDone(item);
     } catch (e) {
-      showAppDialog('Print failed', e?.message || 'Unable to print this file.', undefined, {
-        variant: 'error',
-        icon: 'print-outline',
-      });
+      await showUserFacingErrorDialog(e, { action: 'print this file' });
     } finally {
       setIsPrinting(false);
     }
@@ -591,10 +589,7 @@ const OrderPicking = ({ route, navigation }) => {
         { variant: 'success', icon: 'cloud-done-outline' }
       );
     } catch (e) {
-      showAppDialog('Download failed', e?.message || 'Unable to download this file.', undefined, {
-        variant: 'error',
-        icon: 'cloud-download-outline',
-      });
+      await showUserFacingErrorDialog(e, { action: 'download this file' });
     } finally {
       setIsDownloading(false);
       setDownloadingItemId(null);
@@ -620,10 +615,7 @@ const OrderPicking = ({ route, navigation }) => {
         });
       }
     } catch (e) {
-      showAppDialog('Preview failed', e?.message || 'Unable to open this file.', undefined, {
-        variant: 'error',
-        icon: 'eye-off-outline',
-      });
+      await showUserFacingErrorDialog(e, { action: 'open this file' });
     }
   };
 
@@ -702,7 +694,7 @@ const OrderPicking = ({ route, navigation }) => {
           { variant: 'warning', icon: 'car-outline' }
         );
       } else {
-        showAppDialog("Couldn't mark ready", msg, [{ text: 'OK' }], { variant: 'error' });
+        await showUserFacingErrorDialog(error, { action: 'mark this order ready' });
       }
     } finally {
       setIsAssigningDriver(false);
@@ -737,10 +729,14 @@ const OrderPicking = ({ route, navigation }) => {
     } catch (error) {
       const message = error?.message || 'Failed to complete pickup.';
       const isExpired = String(message).toLowerCase().includes('expired');
-      showAppDialog(isExpired ? 'OTP expired' : "Couldn't complete pickup", message, undefined, {
-        variant: 'error',
-        icon: isExpired ? 'time-outline' : 'alert-circle',
-      });
+      if (isExpired) {
+        showAppDialog('OTP expired', 'This pickup OTP has expired. Please ask the customer for a new code.', undefined, {
+          variant: 'error',
+          icon: 'time-outline',
+        });
+      } else {
+        await showUserFacingErrorDialog(error, { action: 'complete this pickup' });
+      }
     } finally {
       setIsCompletingPickup(false);
     }

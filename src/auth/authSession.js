@@ -169,7 +169,7 @@ export const hydrateAuthSession = async () => {
       const storedSession = await readStoredSession();
       return setCurrentSession(storedSession);
     } catch (error) {
-      console.error('Failed to hydrate auth session:', error);
+      console.warn('Failed to hydrate auth session:', error?.message || error);
       return setCurrentSession(emptySession);
     } finally {
       hydratePromise = null;
@@ -262,7 +262,7 @@ export const refreshAuthSession = async ({
 
       return currentSession.accessToken;
     } catch (error) {
-      console.error('Failed to refresh auth session:', error);
+      console.warn('Failed to refresh auth session:', error?.message || error);
       await clearAuthSession();
       return null;
     } finally {
