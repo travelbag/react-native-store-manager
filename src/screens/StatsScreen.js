@@ -1,229 +1,158 @@
-import React from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-} from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useOrders, ORDER_STATUS } from '../context/OrdersContext';
+import { Ionicons } from '@expo/vector-icons';
+import { useOrders } from '../context/OrdersContext';
+
+const RANGE_OPTIONS = [
+  { key: 'today', label: 'Today' },
+  { key: 'week', label: 'This week' },
+  { key: 'month', label: 'This month' },
+  { key: 'custom', label: 'Custom' },
+];
+
+const toDateOnlyKey = (val) => {
+  if (!val) return '';
+  const d = val instanceof Date ? val : new Date(val);
+  if (Number.isNaN(d.getTime())) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+const parseDateKey = (key) => {
+  const [y, m, d] = String(key || '').split('-').map(Number);
+  if (!y || !m || !d) return new Date();
+  return new Date(y, m - 1, d, 12, 0, 0, 0);
+};
+
+const shiftDateKey = (key, days) => {
+  const next = parseDateKey(key);
+  next.setDate(next.getDate() + days);
+  return toDateOnlyKey(next);
+};
+
+const startOfWeekMonday = (date) => {
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const day = d.getDay();
+  const offset = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + offset);
+  return d;
+};
+
+const formatDisplayDate = (key) => {
+  const d = parseDateKey(key);
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+};
+
+const getOrderDateField = (order) =>
+  order?.timestamp ?? order?.orderDate ?? order?.created_at ?? order?.acceptedAt ?? null;
+
+const DateStepper = ({ label, value, onChange }) => (
+  <View style={styles.stepper}>
+    <Text style={styles.stepperLabel}>{label}</Text>
+    <View style={styles.stepperRow}>
+      <Pressable style={styles.stepperBtn} onPress={() => onChange(shiftDateKey(value, -1))}>
+        <Ionicons name="chevron-back" size={18} color="#111827" />
+      </Pressable>
+      <Text style={styles.stepperValue}>{formatDisplayDate(value)}</Text>
+      <Pressable style={styles.stepperBtn} onPress={() => onChange(shiftDateKey(value, 1))}>
+        <Ionicons name="chevron-forward" size={18} color="#111827" />
+      </Pressable>
+    </View>
+  </View>
+);
 
 const StatsScreen = () => {
   const { orders } = useOrders();
-
-  // Safely convert a currency-like value to number (handles "$1,234.56", "1.234,56", etc.)
-  const toNumber = (val) => {
-    if (val == null) return 0;
-    if (typeof val === 'number' && Number.isFinite(val)) return val;
-    if (typeof val === 'string') {
-      // Remove currency symbols and spaces
-      let s = val.trim();
-      // Common case: "$1,234.56" -> "1234.56"
-      s = s.replace(/[^0-9,.-]/g, '');
-      // If both comma and dot exist, assume comma is thousand separator
-      if (s.includes(',') && s.includes('.')) {
-        s = s.replace(/,/g, '');
-      } else if (s.includes(',') && !s.includes('.')) {
-        // If only comma exists, assume it's decimal separator: "1234,56" -> "1234.56"
-        s = s.replace(/,/g, '.');
-      }
-      const n = parseFloat(s);
-      return Number.isFinite(n) ? n : 0;
-    }
-    return 0;
-  };
-
-  // Determine best total for an order with fallbacks
-  const getOrderTotal = (order) => {
-    if (!order) return 0;
-    const candidates = [order.total, order.totalPrice, order.total_amount];
-    for (const c of candidates) {
-      const n = toNumber(c);
-      if (n > 0) return n;
-    }
-    // Fallback: compute from items if totals missing
-    const items = Array.isArray(order.items)
-      ? order.items
-      : (typeof order.items === 'string' ? (() => { try { return JSON.parse(order.items); } catch { return []; } })() : []);
-    if (Array.isArray(items) && items.length) {
-      return items.reduce((sum, it) => sum + toNumber(it.price) * toNumber(it.quantity || 1), 0);
-    }
-    return 0;
-  };
-
-  // Compare only calendar dates (ignoring time) using a normalized YYYY-MM-DD key
-  const toDateOnlyKey = (val) => {
-    if (!val) return '';
-    const d = new Date(val);
-    if (isNaN(d)) return '';
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`; // local date key
-  };
-
-  const getOrderDateField = (order) => {
-    return order?.timestamp ?? order?.orderDate ?? order?.created_at ?? null;
-  };
-
   const todayKey = toDateOnlyKey(new Date());
+  const [range, setRange] = useState('today');
+  const [customFrom, setCustomFrom] = useState(todayKey);
+  const [customTo, setCustomTo] = useState(todayKey);
 
-  const todayOrders = orders.filter(order => {
-    const key = toDateOnlyKey(getOrderDateField(order));
-    return key === todayKey;
-  });
-// console.log('📊 Calculated stats for', orders, 'orders,', todayOrders.length, 'today') ;
-  const statusOf = (o) => String(o?.status ?? o?.orderStatus ?? '').toLowerCase();
+  const { count, caption, totalOrders } = useMemo(() => {
+    const safeOrders = Array.isArray(orders) ? orders : [];
+    const now = new Date();
+    let fromKey = todayKey;
+    let toKey = todayKey;
 
-  const stats = {
-    totalOrders: orders.length,
-    todayOrders: todayOrders.length,
-    pendingOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.PENDING).length,
-    acceptedOrders: orders.filter((o) => {
-      const status = statusOf(o);
-      return status === ORDER_STATUS.ACCEPTED || status === ORDER_STATUS.READY;
-    }).length,
-    pickingOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.PICKING).length,
-    preparingOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.PREPARING).length,
-    readyOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.READY).length,
-    completedOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.COMPLETED).length,
-    rejectedOrders: orders.filter(o => statusOf(o) === ORDER_STATUS.REJECTED).length,
-    totalRevenue: orders
-      .filter(o => statusOf(o) === ORDER_STATUS.COMPLETED)
-      .reduce((sum, order) => sum + getOrderTotal(order), 0),
-    todayRevenue: todayOrders
-      .filter(o => statusOf(o) === ORDER_STATUS.COMPLETED)
-      .reduce((sum, order) => sum + getOrderTotal(order), 0),
-  };
+    if (range === 'week') {
+      fromKey = toDateOnlyKey(startOfWeekMonday(now));
+      const end = startOfWeekMonday(now);
+      end.setDate(end.getDate() + 6);
+      toKey = toDateOnlyKey(end);
+    } else if (range === 'month') {
+      fromKey = toDateOnlyKey(new Date(now.getFullYear(), now.getMonth(), 1));
+      toKey = toDateOnlyKey(new Date(now.getFullYear(), now.getMonth() + 1, 0));
+    } else if (range === 'custom') {
+      fromKey = customFrom <= customTo ? customFrom : customTo;
+      toKey = customFrom <= customTo ? customTo : customFrom;
+    }
 
-  const StatCard = ({ title, value, subtitle, color = '#007AFF' }) => (
-    <View style={styles.statCard}>
-      <Text style={styles.statTitle}>{title}</Text>
-      <Text style={[styles.statValue, { color }]}>{value}</Text>
-      {subtitle && <Text style={styles.statSubtitle}>{subtitle}</Text>}
-    </View>
-  );
+    const matched = safeOrders.filter((order) => {
+      const key = toDateOnlyKey(getOrderDateField(order));
+      return key && key >= fromKey && key <= toKey;
+    });
 
-  const StatusCard = ({ status, count, color }) => (
-    <View style={styles.statusCard}>
-      <View style={[styles.statusIndicator, { backgroundColor: color }]} />
-      <View style={styles.statusInfo}>
-        <Text style={styles.statusLabel}>{status}</Text>
-        <Text style={styles.statusCount}>{count}</Text>
-      </View>
-    </View>
-  );
+    const captionText =
+      fromKey === toKey
+        ? formatDisplayDate(fromKey)
+        : `${formatDisplayDate(fromKey)} – ${formatDisplayDate(toKey)}`;
+
+    return { count: matched.length, caption: captionText, totalOrders: safeOrders.length };
+  }, [orders, range, customFrom, customTo, todayKey]);
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Analytics</Text>
-          <Text style={styles.headerSubtitle}>Store performance overview</Text>
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Analytics</Text>
+        <Text style={styles.headerSubtitle}>Order counts for your store</Text>
+      </View>
+
+      <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.chips}
+        >
+          {RANGE_OPTIONS.map((option) => {
+            const active = range === option.key;
+            return (
+              <Pressable
+                key={option.key}
+                style={[styles.chip, active && styles.chipActive]}
+                onPress={() => setRange(option.key)}
+              >
+                <Text style={[styles.chipText, active && styles.chipTextActive]}>{option.label}</Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+
+        {range === 'custom' ? (
+          <View style={styles.customBlock}>
+            <DateStepper label="From" value={customFrom} onChange={setCustomFrom} />
+            <DateStepper label="To" value={customTo} onChange={setCustomTo} />
+          </View>
+        ) : null}
+
+        <View style={styles.card}>
+          <View style={[styles.iconWrap, styles.iconToday]}>
+            <Ionicons name="receipt-outline" size={22} color="#047857" />
+          </View>
+          <Text style={styles.cardLabel}>Orders in period</Text>
+          <Text style={styles.cardValue}>{count}</Text>
+          <Text style={styles.cardCaption}>{caption}</Text>
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Today's Summary</Text>
-          <View style={styles.statsGrid}>
-            <StatCard
-              title="Orders Today"
-              value={stats.todayOrders}
-              subtitle="orders received"
-              color="#34C759"
-            />
-            <StatCard
-              title="Revenue Today"
-              value={`₹${Number(stats.todayRevenue || 0).toFixed(2)}`}
-              subtitle="earnings"
-              color="#FF9500"
-            />
+        <View style={styles.card}>
+          <View style={[styles.iconWrap, styles.iconTotal]}>
+            <Ionicons name="layers-outline" size={22} color="#1D4ED8" />
           </View>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Overall Statistics</Text>
-          <View style={styles.statsGrid}>
-            <StatCard
-              title="Total Orders"
-              value={stats.totalOrders}
-              subtitle="all time"
-            />
-            <StatCard
-              title="Total Revenue"
-              value={`₹${Number(stats.totalRevenue || 0).toFixed(2)}`}
-              subtitle="all time"
-              color="#FF9500"
-            />
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Order Status Breakdown</Text>
-          <View style={styles.statusGrid}>
-            <StatusCard
-              status="Pending"
-              count={stats.pendingOrders}
-              color="#FF9500"
-            />
-            <StatusCard
-              status="Accepted"
-              count={stats.acceptedOrders}
-              color="#007AFF"
-            />
-            <StatusCard
-              status="Picking Items"
-              count={stats.pickingOrders}
-              color="#FF9500"
-            />
-            <StatusCard
-              status="Preparing"
-              count={stats.preparingOrders}
-              color="#FF9500"
-            />
-            <StatusCard
-              status="Completed"
-              count={stats.completedOrders}
-              color="#8E8E93"
-            />
-            <StatusCard
-              status="Rejected"
-              count={stats.rejectedOrders}
-              color="#FF3B30"
-            />
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Performance Metrics</Text>
-          <View style={styles.metricsContainer}>
-            <View style={styles.metricItem}>
-              <Text style={styles.metricLabel}>Average Order Value</Text>
-              <Text style={styles.metricValue}>
-                ₹{stats.completedOrders > 0 
-                  ? (stats.totalRevenue / stats.completedOrders).toFixed(2)
-                  : '0.00'
-                }
-              </Text>
-            </View>
-            <View style={styles.metricItem}>
-              <Text style={styles.metricLabel}>Completion Rate</Text>
-              <Text style={styles.metricValue}>
-                {stats.totalOrders > 0 
-                  ? ((stats.completedOrders / stats.totalOrders) * 100).toFixed(1)
-                  : '0'
-                }%
-              </Text>
-            </View>
-            <View style={styles.metricItem}>
-              <Text style={styles.metricLabel}>Rejection Rate</Text>
-              <Text style={styles.metricValue}>
-                {stats.totalOrders > 0 
-                  ? ((stats.rejectedOrders / stats.totalOrders) * 100).toFixed(1)
-                  : '0'
-                }%
-              </Text>
-            </View>
-          </View>
+          <Text style={styles.cardLabel}>Total orders</Text>
+          <Text style={[styles.cardValue, styles.cardValueTotal]}>{totalOrders}</Text>
+          <Text style={styles.cardCaption}>All orders loaded for this store</Text>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -235,134 +164,133 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F2F2F7',
   },
-  scrollContent: {
-    padding: 16,
-  },
   header: {
-    marginBottom: 24,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 12,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E5EA',
   },
   headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#000000',
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#111827',
   },
   headerSubtitle: {
-    fontSize: 16,
-    color: '#666666',
-    marginTop: 4,
+    fontSize: 13,
+    color: '#6B7280',
+    marginTop: 2,
   },
-  section: {
-    marginBottom: 24,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#000000',
-    marginBottom: 16,
-  },
-  statsGrid: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
+  body: {
     padding: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 3.84,
-    elevation: 5,
+    paddingBottom: 28,
   },
-  statTitle: {
-    fontSize: 14,
-    color: '#666666',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  statValue: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 4,
-  },
-  statSubtitle: {
-    fontSize: 12,
-    color: '#999999',
-    textAlign: 'center',
-  },
-  statusGrid: {
+  chips: {
     gap: 8,
+    paddingBottom: 12,
   },
-  statusCard: {
+  chip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 16,
     backgroundColor: '#FFFFFF',
-    padding: 16,
-    borderRadius: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 3.84,
-    elevation: 5,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
   },
-  statusIndicator: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    marginRight: 12,
+  chipActive: {
+    backgroundColor: '#007AFF',
+    borderColor: '#007AFF',
   },
-  statusInfo: {
-    flex: 1,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  chipText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#374151',
   },
-  statusLabel: {
-    fontSize: 16,
-    color: '#333333',
+  chipTextActive: {
+    color: '#FFFFFF',
   },
-  statusCount: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#000000',
+  customBlock: {
+    gap: 8,
+    marginBottom: 8,
   },
-  metricsContainer: {
+  stepper: {
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
-    padding: 16,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 3.84,
-    elevation: 5,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 10,
   },
-  metricItem: {
+  stepperLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#6B7280',
+    marginBottom: 6,
+  },
+  stepperRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
+    justifyContent: 'space-between',
   },
-  metricLabel: {
-    fontSize: 16,
-    color: '#333333',
+  stepperBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  metricValue: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#007AFF',
+  stepperValue: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    paddingVertical: 22,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    marginTop: 4,
+    marginBottom: 12,
+  },
+  iconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
+  iconTotal: {
+    backgroundColor: '#DBEAFE',
+  },
+  iconToday: {
+    backgroundColor: '#D1FAE5',
+  },
+  cardLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
+  cardValue: {
+    marginTop: 4,
+    fontSize: 40,
+    fontWeight: '800',
+    color: '#047857',
+  },
+  cardValueTotal: {
+    color: '#1D4ED8',
+  },
+  cardCaption: {
+    marginTop: 4,
+    fontSize: 13,
+    color: '#6B7280',
+    textAlign: 'center',
   },
 });
 

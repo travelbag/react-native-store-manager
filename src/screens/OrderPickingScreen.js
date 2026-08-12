@@ -37,6 +37,12 @@ import { resolvePickExpiryState } from '../utils/resolvePickExpiry';
 import { getItemExpiryValue, getInventoryExpiryAlert } from '../utils/inventoryExpiry';
 import { confirmAppDialog, showAppDialog } from '../context/DialogContext';
 import { confirmExpiringSoonPick } from '../utils/expiryDialog';
+import {
+  isNoRacksAvailableError,
+  resolveAssignedPackoutRack,
+  showNoPackoutRacksDialog,
+  showPackoutRackAssignedDialog,
+} from '../utils/packoutRack';
 
 const sameOrderId = (o, routeOrderId) =>
   String(o?.id ?? o?.orderId ?? '').trim() === String(routeOrderId ?? '').trim();
@@ -647,13 +653,19 @@ const OrderPicking = ({ route, navigation }) => {
       setIsAssigningDriver(true);
       const result = await markOrderReady(targetOrderId);
       if (isPickupOrder) {
-        showAppDialog(
+        await showAppDialog(
           'Pickup order ready',
           'The customer has been notified by SMS with the pickup OTP.',
           [{ text: 'OK' }],
           { variant: 'success', icon: 'bag-check' }
         );
       } else {
+        const resolvedRack = resolveAssignedPackoutRack(result);
+        if (resolvedRack) {
+          await showPackoutRackAssignedDialog(resolvedRack);
+        } else {
+          await showNoPackoutRacksDialog();
+        }
         const readyNotificationReason = String(result?.readyNotification?.reason || '').toLowerCase();
         if (readyNotificationReason === 'no_checked_in_available_drivers') {
           showAppDialog(
@@ -664,22 +676,18 @@ const OrderPicking = ({ route, navigation }) => {
           );
         }
       }
-      const resolvedRack = String(
-        result?.packageRack || result?.rackNumber || result?.rack_number || result?.seedOrderRack || ''
-      ).trim();
       navigation.navigate('OrdersList', {
         selectedTab: isPickupOrder ? ORDER_STATUS.PICKUP_AT_STORE : ORDER_STATUS.ACCEPTED,
-        readyNotice: isPickupOrder
-          ? 'Pickup order marked ready. Customer notified by SMS.'
-          : resolvedRack
-          ? `Order marked ready. Keep package in rack ${resolvedRack}.`
-          : 'Order marked ready. Rack pending.',
       });
     } catch (error) {
       console.log('[OrderPicking] Mark as ready failed', {
         orderId: targetOrderId,
         error: error?.message || String(error),
       });
+      if (isNoRacksAvailableError(error)) {
+        await showNoPackoutRacksDialog();
+        return;
+      }
       const msg = error?.message || 'Failed to mark order ready. Please try again.';
       const normalizedMessage = String(msg).toLowerCase();
       const isNoDriverError =

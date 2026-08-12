@@ -1,11 +1,12 @@
 import React from "react";
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
 import { confirmAppDialog, showAppDialog } from "../context/DialogContext";
 import { apiClient } from "../services/apiClient";
 
-const ProfileScreen = ({ navigation }) => {
+const ProfileScreen = () => {
   const { manager, logout } = useAuth();
 
   const handleSignOut = async () => {
@@ -77,28 +78,21 @@ const ProfileScreen = ({ navigation }) => {
   };
 
   return (
-    <View style={styles.outer}>
+    <SafeAreaView style={styles.outer} edges={['top']}>
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator
       >
-        {/* Header */}
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()}>
-            <Ionicons name="arrow-back" size={28} color="#000" />
-          </TouchableOpacity>
           <Text style={styles.headerTitle}>Profile</Text>
-          <View style={{ width: 28 }} />
         </View>
 
-        {/* Profile Icon */}
         <View style={styles.profileIconContainer}>
           <Ionicons name="person-circle-outline" size={90} color="#51A2F8" />
         </View>
 
-        {/* Profile Info */}
         <View style={styles.infoBox}>
           <View style={styles.row}>
             <Text style={styles.label}>Name</Text>
@@ -109,11 +103,12 @@ const ProfileScreen = ({ navigation }) => {
 
           <View style={styles.row}>
             <Text style={styles.label}>Role</Text>
-            <Text style={styles.value}>{manager?.role || "Store Manager"}</Text>
+            <Text style={styles.value}>
+              {String(manager?.role || '').toLowerCase() === 'employee' ? 'Employee' : 'Picker'}
+            </Text>
           </View>
         </View>
 
-        {/* Buttons */}
         <TouchableOpacity style={styles.deleteButton} onPress={handleDeleteAccount}>
           <Text style={styles.deleteText}>Delete Account</Text>
         </TouchableOpacity>
@@ -122,7 +117,7 @@ const ProfileScreen = ({ navigation }) => {
           <Text style={styles.logoutText}>Sign Out</Text>
         </TouchableOpacity>
       </ScrollView>
-    </View>
+    </SafeAreaView>
   );
 };
 
@@ -135,27 +130,22 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    padding: 20,
-    paddingTop: 50,
+    padding: 16,
     paddingBottom: 32,
     flexGrow: 1,
   },
   header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 30,
+    marginBottom: 16,
   },
   headerTitle: {
     fontSize: 20,
-    fontWeight: "bold",
+    fontWeight: "700",
+    color: "#111827",
   },
   profileIconContainer: {
     alignItems: "center",
-    marginTop: 20,
-    marginBottom: 30,
-    },
-
+    marginBottom: 16,
+  },
   infoBox: {
     backgroundColor: "#F8F9FB",
     padding: 20,
@@ -165,32 +155,28 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowRadius: 4,
     elevation: 2,
-    },
-
-    row: {
+  },
+  row: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     paddingVertical: 12,
-    },
-
+  },
   label: {
     fontSize: 16,
     color: "#555",
     fontWeight: "500",
-    },
-
+  },
   value: {
     fontSize: 16,
     fontWeight: "600",
     color: "#000",
-    },
-
+  },
   separator: {
     height: 1,
     backgroundColor: "#E5E5E5",
     marginVertical: 8,
-    },
+  },
   deleteButton: {
     backgroundColor: "#ff3b30",
     padding: 15,

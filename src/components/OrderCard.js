@@ -13,6 +13,13 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useOrders, ORDER_STATUS, ITEM_STATUS, isPickupFulfillmentOrder, isPickupCompletedOrder } from '../context/OrdersContext';
 import { showAppDialog } from '../context/DialogContext';
+import {
+  isNoRacksAvailableError,
+  resolveAssignedPackoutRack,
+  showNoPackoutRacksDialog,
+  showPackoutRackAssignedDialog,
+} from '../utils/packoutRack';
+import PackoutRackBadge from './PackoutRackBadge';
 import { useNavigation } from '@react-navigation/native';
 
 const OrderCard = ({ order, hideStatusBadge = false }) => {
@@ -166,7 +173,7 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
         response: result,
       });
       if (isPickupOrder) {
-        showAppDialog(
+        await showAppDialog(
           'Pickup order ready',
           'The customer has been notified by SMS with the pickup OTP.',
           [{ text: 'OK' }],
@@ -177,9 +184,14 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
         }
         navigation.navigate('OrdersList', {
           selectedTab: ORDER_STATUS.PICKUP_AT_STORE,
-          readyNotice: 'Pickup order marked ready. Customer notified by SMS.',
         });
         return;
+      }
+      const resolvedRack = resolveAssignedPackoutRack(result);
+      if (resolvedRack) {
+        await showPackoutRackAssignedDialog(resolvedRack);
+      } else {
+        await showNoPackoutRacksDialog();
       }
       const readyNotificationReason = String(result?.readyNotification?.reason || '').toLowerCase();
       if (readyNotificationReason === 'no_checked_in_available_drivers') {
@@ -190,19 +202,17 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
           { variant: 'warning', icon: 'car-outline' }
         );
       }
-      const resolvedRack = String(
-        result?.packageRack || result?.rackNumber || result?.rack_number || result?.seedOrderRack || ''
-      ).trim();
       if (typeof refreshOrders === 'function') {
         await refreshOrders(null, { force: true });
       }
       navigation.navigate('OrdersList', {
         selectedTab: ORDER_STATUS.ACCEPTED,
-        readyNotice: resolvedRack
-          ? `Order marked ready. Keep package in rack ${resolvedRack}.`
-          : 'Order marked ready. Rack pending.',
       });
     } catch (error) {
+      if (isNoRacksAvailableError(error)) {
+        await showNoPackoutRacksDialog();
+        return;
+      }
       const message = error?.message || 'Failed to mark order ready';
       const normalizedMessage = String(message).toLowerCase();
       const isNoDriverError =
@@ -349,6 +359,13 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
       </View>
     ));
   };
+
+  const renderInlinePackoutRack = () =>
+    packageRack ? (
+      <View style={styles.inlineRackChip}>
+        <Text style={styles.inlineRackText}>{packageRack}</Text>
+      </View>
+    ) : null;
 
   /** Pending + accepted compact card: full-width thumb + rack row (slide for more) */
   const renderCompactRackThumbRow = () => (
@@ -538,6 +555,15 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
 
           <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Total</Text>
           <Text style={styles.detailsLineStrong}>₹{total}</Text>
+
+          {packageRack ? (
+            <>
+              <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Package rack</Text>
+              <View style={styles.detailsPackoutRackWrap}>
+                <PackoutRackBadge rackNumber={packageRack} size="sm" captionTop="Place on" captionBottom="Rack" />
+              </View>
+            </>
+          ) : null}
         </>
       );
     }
@@ -575,7 +601,9 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
         {packageRack ? (
           <>
             <Text style={[styles.detailsSectionTitle, styles.detailsSectionSpaced]}>Package rack</Text>
-            <Text style={styles.detailsLineStrong}>{packageRack}</Text>
+            <View style={styles.detailsPackoutRackWrap}>
+              <PackoutRackBadge rackNumber={packageRack} size="sm" captionTop="Place on" captionBottom="Rack" />
+            </View>
           </>
         ) : null}
 
@@ -667,21 +695,31 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
             onPress={() => setDetailsModalVisible(true)}
             android_ripple={{ color: '#E5E5EA' }}
           >
-            <Text style={styles.compactOrderIdText}>Order #{orderId}</Text>
-            <Text style={styles.compactOrderIdHint}>Tap for customer, products & total</Text>
+            <View style={styles.compactOrderIdRow}>
+              <Text style={styles.compactOrderIdText} numberOfLines={1}>
+                #{orderId}
+              </Text>
+              {renderInlinePackoutRack()}
+            </View>
+            <Text style={styles.compactOrderIdHint}>Tap for details</Text>
           </Pressable>
-          {renderCompactRackThumbRow()}
           <View style={styles.compactActionsWrap}>{renderActionButtons()}</View>
+          {renderCompactRackThumbRow()}
         </>
       ) : (
         <>
       <View style={styles.header}>
-        <View>
-          <Text style={styles.orderId}>Order #{orderId}</Text>
+        <View style={styles.headerMain}>
+          <View style={styles.orderIdRow}>
+            <Text style={styles.orderId} numberOfLines={1}>
+              Order #{orderId}
+            </Text>
+            {renderInlinePackoutRack()}
+          </View>
           <Text style={styles.customerName}>{customerName}</Text>
           <Text style={styles.time}>{formatDateTime(timestamp)}</Text>
         </View>
-        {!hideStatusBadge || packageRack || showPickedUpAtStoreHighlight ? (
+        {!hideStatusBadge || showPickedUpAtStoreHighlight ? (
           <View style={styles.statusContainer}>
             {!hideStatusBadge || showPickedUpAtStoreHighlight ? (
               <View
@@ -697,12 +735,6 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
                 <Text style={styles.statusText}>
                   {showPickedUpAtStoreHighlight ? 'Delivered' : getStatusText(status)}
                 </Text>
-              </View>
-            ) : null}
-            {packageRack ? (
-              <View style={styles.rackBadge}>
-                <Ionicons name="cube-outline" size={14} color="#FFFFFF" />
-                <Text style={styles.rackBadgeText}>{packageRack}</Text>
               </View>
             ) : null}
           </View>
@@ -781,12 +813,6 @@ const OrderCard = ({ order, hideStatusBadge = false }) => {
           <Text style={styles.infoLabel}>Phone:</Text>
           <Text style={styles.infoText}>{phoneNumber}</Text>
         </View>
-        {packageRack ? (
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Package Rack:</Text>
-            <Text style={styles.infoTextDriver}>{packageRack}</Text>
-          </View>
-        ) : null}
         {(driverName || driverPhone) ? (
           <View style={styles.driverBlock}>
             <View style={styles.infoRow}>
@@ -835,47 +861,71 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   containerMinimal: {
-    paddingVertical: 12,
-    paddingHorizontal: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginVertical: 6,
   },
   compactOrderIdPress: {
     width: '100%',
-    marginBottom: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
+    marginBottom: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
     borderWidth: 1,
-    borderColor: '#C5CCD6',
-    borderRadius: 10,
+    borderColor: '#E5E7EB',
+    borderRadius: 8,
     backgroundColor: '#FAFAFA',
   },
+  compactOrderIdRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   compactOrderIdText: {
-    fontSize: 18,
+    flex: 1,
+    fontSize: 15,
     fontWeight: '700',
-    color: '#000000',
+    color: '#111827',
+  },
+  inlineRackChip: {
+    backgroundColor: '#FFF8E1',
+    borderWidth: 2,
+    borderColor: '#FF9800',
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    minWidth: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  inlineRackText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#E65100',
+    letterSpacing: 0.3,
   },
   compactOrderIdHint: {
     fontSize: 11,
     color: '#8E8E93',
-    marginTop: 4,
+    marginTop: 2,
     fontWeight: '500',
   },
   compactRackRowOuter: {
     flexDirection: 'row',
     alignItems: 'center',
     width: '100%',
-    marginBottom: 8,
+    marginTop: 8,
     borderWidth: 1,
-    borderColor: '#E5E5EA',
-    borderRadius: 10,
+    borderColor: '#E5E7EB',
+    borderRadius: 8,
     backgroundColor: '#FFFFFF',
     paddingLeft: 6,
-    paddingVertical: 6,
+    paddingVertical: 4,
     paddingRight: 4,
   },
   compactRackRowScroll: {
     flex: 1,
     minWidth: 0,
-    maxHeight: 86,
+    maxHeight: 64,
   },
   compactRackRowChevron: {
     justifyContent: 'center',
@@ -891,27 +941,27 @@ const styles = StyleSheet.create({
     paddingRight: 8,
   },
   compactThumbCell: {
-    width: 58,
+    width: 48,
     alignItems: 'center',
-    marginRight: 10,
+    marginRight: 8,
   },
   compactThumbImage: {
-    width: 48,
-    height: 48,
+    width: 40,
+    height: 40,
     borderRadius: 8,
     backgroundColor: '#ECECEC',
   },
   compactThumbPrint: {
-    width: 48,
-    height: 48,
+    width: 40,
+    height: 40,
     borderRadius: 8,
     backgroundColor: '#EEF2FF',
     alignItems: 'center',
     justifyContent: 'center',
   },
   compactThumbPlaceholder: {
-    width: 48,
-    height: 48,
+    width: 40,
+    height: 40,
     borderRadius: 8,
     backgroundColor: '#ECECEC',
   },
@@ -1087,10 +1137,22 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     marginBottom: 12,
   },
+  headerMain: {
+    flex: 1,
+    minWidth: 0,
+    marginRight: 8,
+  },
+  orderIdRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
   orderId: {
     fontSize: 18,
     fontWeight: 'bold',
     color: '#000000',
+    flexShrink: 1,
   },
   customerName: {
     fontSize: 16,
@@ -1129,6 +1191,10 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '700',
+  },
+  detailsPackoutRackWrap: {
+    alignItems: 'center',
+    paddingVertical: 8,
   },
   pickedUpAtStoreBanner: {
     flexDirection: 'row',
@@ -1430,4 +1496,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default OrderCard;
+export default React.memo(OrderCard);

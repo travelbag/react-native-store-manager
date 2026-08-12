@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import PackoutRackBadge from './PackoutRackBadge';
 
 export const DIALOG_VARIANTS = {
   info: {
@@ -151,23 +152,34 @@ const AppDialog = ({
                 {message ? <Text style={styles.message}>{message}</Text> : null}
 
                 {highlight?.value ? (
-                  <View style={[styles.highlight, { backgroundColor: theme.iconBg, borderColor: theme.border }]}>
-                    <Ionicons
-                      name={highlight.icon || 'time-outline'}
-                      size={18}
-                      color={theme.accent}
-                    />
-                    <View style={styles.highlightText}>
-                      {highlight.label ? (
-                        <Text style={[styles.highlightLabel, { color: theme.accent }]}>
-                          {highlight.label}
-                        </Text>
-                      ) : null}
-                      <Text style={[styles.highlightValue, { color: theme.title }]}>
-                        {highlight.value}
-                      </Text>
+                  highlight?.type === 'rack' ? (
+                    <View style={styles.rackHighlightWrap}>
+                      <PackoutRackBadge
+                        rackNumber={highlight.value}
+                        size="lg"
+                        captionTop={highlight.label || 'Place on'}
+                        captionBottom="Rack"
+                      />
                     </View>
-                  </View>
+                  ) : (
+                    <View style={[styles.highlight, { backgroundColor: theme.iconBg, borderColor: theme.border }]}>
+                      <Ionicons
+                        name={highlight.icon || 'time-outline'}
+                        size={18}
+                        color={theme.accent}
+                      />
+                      <View style={styles.highlightText}>
+                        {highlight.label ? (
+                          <Text style={[styles.highlightLabel, { color: theme.accent }]}>
+                            {highlight.label}
+                          </Text>
+                        ) : null}
+                        <Text style={[styles.highlightValue, { color: theme.title }]}>
+                          {highlight.value}
+                        </Text>
+                      </View>
+                    </View>
+                  )
                 ) : null}
 
                 {detailRows.length > 0 ? (
@@ -285,6 +297,11 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 12,
     marginTop: 14,
+  },
+  rackHighlightWrap: {
+    marginTop: 16,
+    alignItems: 'center',
+    paddingVertical: 4,
   },
   highlightText: {
     flex: 1,

@@ -18,11 +18,10 @@ import { AppState } from 'react-native';
 
 const OrdersScreen = ({ route, navigation }) => {
   const { orders, loading, refreshOrders } = useOrders();
-  const { manager, logout } = useAuth();
+  const { manager } = useAuth();
   const [selectedFilter, setSelectedFilter] = useState(ORDER_STATUS.PENDING);
   const [refreshing, setRefreshing] = useState(false);
   const [alertedCancelledOrders, setAlertedCancelledOrders] = useState(new Set()); // Track alerted order IDs to prevent duplicates
-  const [inlineNotice, setInlineNotice] = useState('');
   const insets = useSafeAreaInsets();
 
   // Handle navigation parameter to set the selected tab
@@ -33,25 +32,6 @@ const OrdersScreen = ({ route, navigation }) => {
       route.params.selectedTab = undefined;
     }
   }, [route?.params?.selectedTab]);
-
-  React.useEffect(() => {
-    if (!route?.params?.readyNotice) {
-      return undefined;
-    }
-    setInlineNotice(route.params.readyNotice);
-    route.params.readyNotice = undefined;
-    refreshOrders(null, { force: true });
-    const refreshTimer = setTimeout(() => {
-      refreshOrders(null, { force: true });
-    }, 2000);
-    const noticeTimer = setTimeout(() => {
-      setInlineNotice('');
-    }, 3000);
-    return () => {
-      clearTimeout(refreshTimer);
-      clearTimeout(noticeTimer);
-    };
-  }, [route?.params?.readyNotice, refreshOrders]);
 
   // Detect newly cancelled orders and show alert (only once per order, for current orders not yet assigned/delivered)
   useEffect(() => {
@@ -190,23 +170,9 @@ const OrdersScreen = ({ route, navigation }) => {
     selectedFilter === ORDER_STATUS.PICKUP_AT_STORE ||
     selectedFilter === 'cancelled';
 
-  const renderOrderItem = ({ item }) => (
-    <OrderCard
-      hideStatusBadge={hideStatusBadge}
-      order={{
-        ...item,
-        id: item?.id ?? item?.orderId ?? '',
-        status: item?.status ?? item?.orderStatus ?? 'N/A',
-        totalPrice: item?.totalPrice ?? item?.total ?? 0,
-        customerName: item?.customerName ?? '',
-        orderDate: item?.orderDate ?? item?.timestamp ?? '',
-        items: Array.isArray(item?.items)
-          ? item.items
-          : typeof item?.items === 'string'
-            ? (() => { try { return JSON.parse(item.items); } catch { return []; } })()
-            : [],
-      }}
-    />
+  const renderOrderItem = React.useCallback(
+    ({ item }) => <OrderCard hideStatusBadge={hideStatusBadge} order={item} />,
+    [hideStatusBadge]
   );
 
   const renderFilterButton = (filter) => (
@@ -246,41 +212,12 @@ const OrdersScreen = ({ route, navigation }) => {
     </View>
   );
 
-  const formatManagerName = (name) => {
-    const safeName = String(name || 'Manager');
-    if (safeName.length <= 11) return safeName;
-    return `${safeName.slice(0, 11)}...`;
-  };
-
-
   return (
-  <SafeAreaView style={styles.container}>
+  <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <View style={styles.headerMain}>
-          <Text style={styles.headerTitle} numberOfLines={1}>Store Manager</Text>
-          <Text style={styles.headerStoreName} numberOfLines={1}>
-            {manager?.storeName || 'Store'}
-          </Text>
-          <Text style={styles.headerOrders}>
-            {filteredOrders.length} {filteredOrders.length === 1 ? 'order' : 'orders'}
-          </Text>
-        </View>
-        <View style={styles.headerActions}>
-          <TouchableOpacity 
-            style={styles.userButton}
-            onPress={() => navigation.navigate("Profile")}
-          >
-            <View style={styles.userInfo}>
-              <Text style={styles.userName} numberOfLines={1}>
-                {formatManagerName(manager?.name)}
-              </Text>
-              <Text style={styles.userRole} numberOfLines={1}>
-                {manager?.role || 'Store Manager'}
-              </Text>
-            </View>
-            <Ionicons name="person-circle-outline" size={32} color="#007AFF" />
-          </TouchableOpacity>
-        </View>
+        <Text style={styles.headerTitle} numberOfLines={1}>
+          {manager?.storeName || 'Store'}
+        </Text>
       </View>
 
       <View style={styles.filtersContainer}>
@@ -293,13 +230,6 @@ const OrdersScreen = ({ route, navigation }) => {
           contentContainerStyle={styles.filtersContent}
         />
       </View>
-
-      {inlineNotice && filteredOrders.length > 0 ? (
-        <View style={styles.noticeBanner}>
-          <Ionicons name="information-circle" size={18} color="#0F5132" />
-          <Text style={styles.noticeBannerText}>{inlineNotice}</Text>
-        </View>
-      ) : null}
 
       <FlatList
         key={selectedFilter}
@@ -315,10 +245,15 @@ const OrdersScreen = ({ route, navigation }) => {
         }
         contentContainerStyle={[
           styles.listContainer,
+          { paddingBottom: Math.max(insets.bottom, 12) + 16 },
           filteredOrders.length === 0 && styles.emptyListContainer,
         ]}
         ListEmptyComponent={renderEmptyState}
         showsVerticalScrollIndicator={false}
+        initialNumToRender={6}
+        maxToRenderPerBatch={6}
+        windowSize={7}
+        removeClippedSubviews
       />
     </SafeAreaView>
   );
@@ -331,85 +266,22 @@ const styles = StyleSheet.create({
   },
   header: {
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 10,
     borderBottomWidth: 1,
     borderBottomColor: '#E5E5E5',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  headerMain: {
-    flex: 1,
   },
   headerTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#000000',
-  },
-  headerStoreName: {
-    fontSize: 16,
-    color: '#353535',
-    marginTop: 6,
-  },
-  headerOrders: {
-    fontSize: 16,
-    color: '#FF3B30',
-    marginTop: 2,
-  },
-  headerActions: {
-    marginLeft: 16,
-    width: 150,
-  },
-  userButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-    backgroundColor: '#F8F9FA',
-    borderRadius: 12,
-    width: '100%',
-    justifyContent: 'space-between',
-  },
-  userInfo: {
-    marginRight: 8,
-    alignItems: 'flex-end',
-    flex: 1,
-    minWidth: 0,
-  },
-  userName: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#000000',
-  },
-  userRole: {
-    fontSize: 12,
-    color: '#666666',
-    marginTop: 2,
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
   },
   filtersContainer: {
     backgroundColor: '#FFFFFF',
-    paddingVertical: 12,
+    paddingVertical: 8,
     borderBottomWidth: 1,
     borderBottomColor: '#E5E5E5',
-  },
-  noticeBanner: {
-    marginHorizontal: 16,
-    marginTop: 12,
-    marginBottom: 4,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 12,
-    backgroundColor: '#E8F7EE',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  noticeBannerText: {
-    flex: 1,
-    color: '#0F5132',
-    fontSize: 14,
-    fontWeight: '600',
   },
   filtersContent: {
     paddingHorizontal: 16,
@@ -452,8 +324,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   listContainer: {
-    paddingTop: 8,
-    paddingBottom: 20,
+    paddingTop: 6,
   },
   emptyListContainer: {
     flex: 1,

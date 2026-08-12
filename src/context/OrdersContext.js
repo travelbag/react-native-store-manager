@@ -441,6 +441,7 @@ export function OrdersProvider({ children }) {
   /** orderId -> last successfully merged time (dedupes duplicate push bursts) */
   const groceryOrderHandledAtRef = React.useRef(new Map());
   const groceryOrderFetchInFlightRef = React.useRef(new Set());
+  const handleNewOrderNotificationRef = React.useRef(null);
   /** null until first list snapshot; then Set of order ids last seen from fetch/poll */
   const previousPollOrderIdsRef = React.useRef(null);
   const pendingOrderSoundAtRef = React.useRef(new Map());
@@ -770,6 +771,8 @@ export function OrdersProvider({ children }) {
     }
   }, []);
 
+  const lastSnapshotSignatureRef = React.useRef('');
+
   const applyOrdersSnapshot = React.useCallback(
     (orders) => {
       const ids = new Set(orders.map((o) => String(o.orderId ?? o.id ?? '')));
@@ -785,6 +788,18 @@ export function OrdersProvider({ children }) {
         }
       }
       previousPollOrderIdsRef.current = ids;
+      const signature = orders
+        .map((order) => {
+          const id = String(order.orderId ?? order.id ?? '');
+          const status = String(order.status ?? order.orderStatus ?? '');
+          const itemCount = Array.isArray(order.items) ? order.items.length : 0;
+          return `${id}:${status}:${itemCount}`;
+        })
+        .join('|');
+      if (signature === lastSnapshotSignatureRef.current) {
+        return;
+      }
+      lastSnapshotSignatureRef.current = signature;
       dispatch({ type: ACTIONS.SET_ORDERS, payload: orders });
     },
     [schedulePendingOrderSoundAlert, emitNewOrderReceived],
@@ -1115,7 +1130,56 @@ export function OrdersProvider({ children }) {
       });
     };
 
+    const handleNewOrder = (payload = {}) => {
+      const eventOrderId = normalizeValue(payload?.orderId ?? payload?.id);
+      if (!eventOrderId) return;
+
+      const payloadStoreId = normalizeStoreIdValue(payload?.storeId);
+      if (payloadStoreId && normalizedStoreId && payloadStoreId !== normalizedStoreId) return;
+
+      const alreadyVisible = ordersRef.current.some(
+        (order) => extractOrderIdValue(order) === eventOrderId
+      );
+      const normalized = normalizeOrder({
+        ...payload,
+        orderId: eventOrderId,
+        id: eventOrderId,
+        status: payload.status ?? payload.orderStatus ?? 'confirmed',
+      });
+      dispatch({ type: ACTIONS.ADD_ORDER, payload: normalized });
+      if (previousPollOrderIdsRef.current) {
+        previousPollOrderIdsRef.current.add(eventOrderId);
+      }
+      if (!alreadyVisible) {
+        emitNewOrderReceived(normalized, 'socket');
+      }
+    };
+
+    const handleOrderUpdated = (payload = {}) => {
+      const eventOrderId = normalizeValue(payload?.orderId ?? payload?.id);
+      if (!eventOrderId) return;
+      const payloadStoreId = normalizeStoreIdValue(payload?.storeId);
+      if (payloadStoreId && normalizedStoreId && payloadStoreId !== normalizedStoreId) return;
+      const existingOrder = ordersRef.current.find(
+        (order) => extractOrderIdValue(order) === eventOrderId
+      );
+      if (!existingOrder) return;
+      dispatch({
+        type: ACTIONS.ADD_ORDER,
+        payload: {
+          ...existingOrder,
+          ...payload,
+          id: existingOrder.id || eventOrderId,
+          orderId: existingOrder.orderId || eventOrderId,
+          status: payload.status ?? existingOrder.status,
+          orderStatus: payload.status ?? existingOrder.orderStatus,
+        },
+      });
+    };
+
     socketClient.on('connect', joinStoreRooms);
+    socketClient.on('new-order', handleNewOrder);
+    socketClient.on('order-updated', handleOrderUpdated);
     socketClient.on('order_cancelled', handleOrderCancelled);
     socketClient.on('order_assigned', handleOrderAssigned);
     socketClient.on('order_assignment_returned', handleOrderAssignmentReturned);
@@ -1123,6 +1187,8 @@ export function OrdersProvider({ children }) {
 
     return () => {
       socketClient.off('connect', joinStoreRooms);
+      socketClient.off('new-order', handleNewOrder);
+      socketClient.off('order-updated', handleOrderUpdated);
       socketClient.off('order_cancelled', handleOrderCancelled);
       socketClient.off('order_assigned', handleOrderAssigned);
       socketClient.off('order_assignment_returned', handleOrderAssignmentReturned);
@@ -1131,7 +1197,7 @@ export function OrdersProvider({ children }) {
         socketRef.current = null;
       }
     };
-  }, [dispatch, isAuthenticated, manager?.storeId]);
+  }, [dispatch, emitNewOrderReceived, isAuthenticated, manager?.storeId, normalizeOrder]);
 
   // Helpers to control sync polling manually (exposed via context for advanced control)
   const stopSyncPolling = () => {
@@ -1183,13 +1249,13 @@ export function OrdersProvider({ children }) {
           (notification) => {
             const data = notification.request.content.data || {};
             if (data._isLocalForegroundAlert || data.type === 'grocery_order_foreground') return;
-            if (data.type === 'grocery_order') handleNewOrderNotification(data);
+            if (data.type === 'grocery_order') handleNewOrderNotificationRef.current?.(data);
             else if (data.type === 'order_status_updated' || data.type === 'order_updated') refreshOrders();
           },
           (response) => {
             const data = response.notification.request.content.data || {};
             if (data._isLocalForegroundAlert || data.type === 'grocery_order_foreground') return;
-            if (data.type === 'grocery_order') handleNewOrderNotification(data);
+            if (data.type === 'grocery_order') handleNewOrderNotificationRef.current?.(data);
             else if (data.type === 'order_status_updated' || data.type === 'order_updated') refreshOrders();
           },
         );
@@ -1216,7 +1282,7 @@ export function OrdersProvider({ children }) {
               return;
             }
             if (data.type === 'grocery_order') {
-              handleNewOrderNotification(data);
+              handleNewOrderNotificationRef.current?.(data);
             } else if (data.type === 'order_status_updated' || data.type === 'order_updated') {
               // Sync with backend when other devices change status
               refreshOrders();
@@ -1228,7 +1294,7 @@ export function OrdersProvider({ children }) {
               return;
             }
             if (data.type === 'grocery_order') {
-              handleNewOrderNotification(data);
+              handleNewOrderNotificationRef.current?.(data);
             } else if (data.type === 'order_status_updated' || data.type === 'order_updated') {
               refreshOrders();
             }
@@ -1302,16 +1368,31 @@ export function OrdersProvider({ children }) {
       if (notificationData?._isLocalForegroundAlert) {
         return;
       }
-      const orderId = notificationData?.orderId;
+      const orderId = String(notificationData?.orderId || '').trim();
       if (!orderId) {
         return;
       }
-      const now = Date.now();
-      const last = groceryOrderHandledAtRef.current.get(orderId);
-      const dedupeMs = 15000;
-      if (last != null && now - last < dedupeMs) {
-        return;
+
+      const alreadyVisible = ordersRef.current.some(
+        (order) => extractOrderIdValue(order) === orderId
+      );
+      if (!alreadyVisible) {
+        const optimistic = normalizeOrder({
+          orderId,
+          id: orderId,
+          customerName: notificationData.customerName || '',
+          totalPrice: notificationData.total,
+          status: notificationData.status || 'confirmed',
+          storeId: notificationData.storeId || notificationData.targetStoreId,
+          timestamp: notificationData.timestamp || new Date().toISOString(),
+        });
+        dispatch({ type: ACTIONS.ADD_ORDER, payload: optimistic });
+        if (previousPollOrderIdsRef.current) {
+          previousPollOrderIdsRef.current.add(orderId);
+        }
+        emitNewOrderReceived(optimistic, 'push');
       }
+
       if (groceryOrderFetchInFlightRef.current.has(orderId)) {
         return;
       }
@@ -1327,19 +1408,16 @@ export function OrdersProvider({ children }) {
       console.log('📦 New order details fetched:', orderDetails);
       if (orderDetails) {
         groceryOrderHandledAtRef.current.set(orderId, Date.now());
-        addOrder(orderDetails);
-        emitNewOrderReceived(orderDetails, 'push');
+        dispatch({ type: ACTIONS.ADD_ORDER, payload: orderDetails });
         if (previousPollOrderIdsRef.current) {
           previousPollOrderIdsRef.current.add(String(orderId));
-        }
-        if (isPendingNewOrderStatus(orderDetails.status ?? orderDetails.orderStatus)) {
-          await schedulePendingOrderSoundAlert(orderDetails);
         }
       }
     } catch (error) {
       console.error('Error handling new order notification:', error);
     }
   };
+  handleNewOrderNotificationRef.current = handleNewOrderNotification;
 
   // Fetch order details from backend
   const fetchOrderDetails = async (orderId) => {
@@ -1459,9 +1537,12 @@ export function OrdersProvider({ children }) {
       responseData = null;
     }
     if (!response.ok) {
-      throw new Error(
+      const readyError = new Error(
         responseData?.message || responseData?.error || 'Failed to mark order ready'
       );
+      readyError.code = responseData?.code || responseData?.error || null;
+      readyError.details = responseData;
+      throw readyError;
     }
     const existingOrder = ordersRef.current.find(
       (order) => extractOrderIdValue(order) === normalizeValue(orderId)
