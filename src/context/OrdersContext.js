@@ -63,7 +63,14 @@ const normalizeStatusValue = (value) => normalizeValue(value).toLowerCase();
 const normalizeStoreIdValue = (value) => normalizeValue(value).replace(/^store-/i, '');
 const extractOrderIdValue = (order = {}) => normalizeValue(order?.orderId ?? order?.id);
 const extractAcceptedManagerIdValue = (order = {}) =>
-  normalizeValue(order?.acceptedByManagerId ?? order?.accepted_by_manager_id);
+  normalizeValue(
+    order?.acceptedByManagerId ??
+      order?.accepted_by_manager_id ??
+      order?.acceptedBy ??
+      order?.accepted_by ??
+      order?.acceptedManagerId ??
+      order?.accepted_manager_id
+  );
 
 const resolvePayloadOrderStatus = (payload = {}, fallback = '') =>
   payload?.status ??
@@ -473,6 +480,8 @@ export function OrdersProvider({ children }) {
   const optimisticPendingOrderAtRef = React.useRef(new Map());
   /** IDs that have appeared in at least one successful /orders/by-store snapshot */
   const serverSeenOrderIdsRef = React.useRef(new Set());
+  /** Orders already confirmed claimed by another picker — never re-add from a stale list poll. */
+  const claimedAwayOrderIdsRef = React.useRef(new Set());
   const pendingAwaitingAcceptanceRef = React.useRef(false);
   const pendingWatchIntervalRef = React.useRef(null);
   const handleNewOrderNotificationRef = React.useRef(null);
@@ -503,6 +512,7 @@ export function OrdersProvider({ children }) {
   useEffect(() => {
     previousPollOrderIdsRef.current = null;
     serverSeenOrderIdsRef.current = new Set();
+    claimedAwayOrderIdsRef.current = new Set();
   }, [manager?.storeId, manager?.id]);
 
   const createLocalItemId = React.useCallback((orderId, item, idx, fallbackType = 'item') => {
@@ -749,8 +759,20 @@ export function OrdersProvider({ children }) {
         orderRaw.rack_number ??
         orderRaw.pickup_rack ??
         '',
-      acceptedByManagerId: orderRaw.acceptedByManagerId ?? orderRaw.accepted_by_manager_id ?? null,
-      acceptedByManagerName: orderRaw.acceptedByManagerName ?? orderRaw.accepted_by_manager_name ?? null,
+      acceptedByManagerId:
+        orderRaw.acceptedByManagerId ??
+        orderRaw.accepted_by_manager_id ??
+        orderRaw.acceptedBy ??
+        orderRaw.accepted_by ??
+        orderRaw.acceptedManagerId ??
+        orderRaw.accepted_manager_id ??
+        null,
+      acceptedByManagerName:
+        orderRaw.acceptedByManagerName ??
+        orderRaw.accepted_by_manager_name ??
+        orderRaw.acceptedByName ??
+        orderRaw.accepted_by_name ??
+        null,
       acceptedAt: orderRaw.acceptedAt ?? orderRaw.accepted_at ?? null,
       fulfillmentType: isPickupFulfillment
         ? 'pickup'
@@ -833,6 +855,7 @@ export function OrdersProvider({ children }) {
   const dropOrderClaimedByOther = React.useCallback((orderId) => {
     const id = normalizeValue(orderId);
     if (!id) return;
+    claimedAwayOrderIdsRef.current.add(id);
     clearOptimisticPendingOrder(id);
     optimisticPendingOrderAtRef.current.delete(id);
     groceryOrderFetchInFlightRef.current.delete(id);
@@ -840,9 +863,75 @@ export function OrdersProvider({ children }) {
     void NotificationService.dismissNotificationsForOrder(id);
   }, [clearOptimisticPendingOrder]);
 
+  const pendingClaimCheckInFlightRef = React.useRef(false);
+
+  const fetchOrderClaimState = React.useCallback(async (orderId) => {
+    const id = normalizeValue(orderId);
+    if (!id) return null;
+    try {
+      const response = await apiClient.get(`${API_CONFIG.ENDPOINTS.ORDER_DETAILS}/${id}`, {
+        timeoutMs: 12000,
+        retryAttempts: 0,
+      });
+      if (!response.ok) return null;
+      const result = await response.json();
+      const orderRaw = result?.data || result?.order || result;
+      return normalizeOrder(orderRaw);
+    } catch (e) {
+      console.warn('⚠️ Pending claim check failed:', e?.message || e);
+      return null;
+    }
+  }, [normalizeOrder]);
+
+  const reconcileLocalPendingOrders = React.useCallback(async () => {
+    if (pendingClaimCheckInFlightRef.current) return;
+    const me = normalizeValue(manager?.id);
+    const pending = (ordersRef.current || []).filter((order) =>
+      isPendingNewOrderStatus(order?.status ?? order?.orderStatus)
+    );
+    if (!pending.length) return;
+
+    pendingClaimCheckInFlightRef.current = true;
+    try {
+      await Promise.all(
+        pending.map(async (order) => {
+          const id = extractOrderIdValue(order);
+          if (!id) return;
+          const latest = await fetchOrderClaimState(id);
+          if (!latest) return;
+
+          const status = canonicalizeOrderStatus(latest.status ?? latest.orderStatus);
+          const acceptedBy = extractAcceptedManagerIdValue(latest);
+          const stillOpen = isPendingNewOrderStatus(status);
+
+          if (stillOpen && !acceptedBy) return;
+
+          if (acceptedBy && me && acceptedBy === me) {
+            if (!stillOpen) {
+              dispatch({
+                type: ACTIONS.UPDATE_ORDER_STATUS,
+                payload: { orderId: id, status },
+              });
+            }
+            return;
+          }
+
+          // Claimed by another picker, or no longer pending on the server.
+          dropOrderClaimedByOther(id);
+        })
+      );
+    } finally {
+      pendingClaimCheckInFlightRef.current = false;
+    }
+  }, [manager?.id, fetchOrderClaimState, dropOrderClaimedByOther]);
+
   const applyOrdersSnapshot = React.useCallback(
     (orders) => {
-      const serverIds = new Set(orders.map((o) => String(o.orderId ?? o.id ?? '')));
+      const visibleOrders = (orders || []).filter((order) => {
+        const id = String(order?.orderId ?? order?.id ?? '');
+        return id && !claimedAwayOrderIdsRef.current.has(id);
+      });
+      const serverIds = new Set(visibleOrders.map((o) => String(o.orderId ?? o.id ?? '')));
       const now = Date.now();
       // Only keep brand-new socket/push rows briefly until the first server snapshot.
       // If the order already appeared on the server and then vanished, another manager accepted it.
@@ -861,6 +950,7 @@ export function OrdersProvider({ children }) {
       const preservedLocal = (ordersRef.current || []).filter((order) => {
         const oid = String(order.orderId ?? order.id ?? '');
         if (!oid || serverIds.has(oid)) return false;
+        if (claimedAwayOrderIdsRef.current.has(oid)) return false;
         if (!isPendingNewOrderStatus(order.status ?? order.orderStatus)) return false;
         if (serverSeenOrderIdsRef.current.has(oid)) return false;
         const optimisticAt = optimisticPendingOrderAtRef.current.get(oid);
@@ -868,7 +958,7 @@ export function OrdersProvider({ children }) {
         return fetchInFlight || optimisticAt != null;
       });
 
-      const mergedOrders = preservedLocal.length > 0 ? [...orders, ...preservedLocal] : orders;
+      const mergedOrders = preservedLocal.length > 0 ? [...visibleOrders, ...preservedLocal] : visibleOrders;
 
       const ids = new Set(mergedOrders.map((o) => String(o.orderId ?? o.id ?? '')));
       const prev = previousPollOrderIdsRef.current;
@@ -887,8 +977,9 @@ export function OrdersProvider({ children }) {
         .map((order) => {
           const id = String(order.orderId ?? order.id ?? '');
           const status = String(order.status ?? order.orderStatus ?? '');
+          const acceptedBy = extractAcceptedManagerIdValue(order);
           const itemCount = Array.isArray(order.items) ? order.items.length : 0;
-          return `${id}:${status}:${itemCount}`;
+          return `${id}:${status}:${acceptedBy}:${itemCount}`;
         })
         .join('|');
       if (signature === lastSnapshotSignatureRef.current) {
@@ -956,7 +1047,11 @@ export function OrdersProvider({ children }) {
         }
         return {
           ok: true,
-          orders: normalized.filter(isOrderVisibleToManager),
+          orders: normalized.filter(
+            (order) =>
+              isOrderVisibleToManager(order) &&
+              !claimedAwayOrderIdsRef.current.has(String(order?.orderId ?? order?.id ?? ''))
+          ),
           error: null,
         };
       } catch (error) {
@@ -998,6 +1093,12 @@ export function OrdersProvider({ children }) {
         if (stateErrorRef.current) {
           dispatch({ type: ACTIONS.SET_ERROR, payload: null });
         }
+        const stillPending = (ordersRef.current || []).some((order) =>
+          isPendingNewOrderStatus(order?.status ?? order?.orderStatus)
+        );
+        if (stillPending) {
+          void reconcileLocalPendingOrders();
+        }
         return { ok: true, orders: result.orders };
       }
 
@@ -1036,7 +1137,7 @@ export function OrdersProvider({ children }) {
       const cachedOrders = ordersRef.current || [];
       return { ok: false, orders: cachedOrders, error: result.error };
     },
-    [applyOrdersSnapshot, fetchOrdersFromDB],
+    [applyOrdersSnapshot, fetchOrdersFromDB, reconcileLocalPendingOrders],
   );
 
   const refreshOrders = React.useCallback(
@@ -1183,8 +1284,8 @@ export function OrdersProvider({ children }) {
     isAppActive,
   ]);
 
-  // While a pending order is ringing, poll every 5s even if socket.io looks connected.
-  // Socket accept events are not reliable across all manager devices.
+  // While a pending order is ringing, poll the list and each pending order's
+  // detail status. The store list often lags after another picker accepts.
   useEffect(() => {
     if (pendingWatchIntervalRef.current) {
       clearInterval(pendingWatchIntervalRef.current);
@@ -1193,10 +1294,14 @@ export function OrdersProvider({ children }) {
     if (!isAuthenticated || !manager?.storeId || !isAppActive || !hasPendingOrdersAwaitingAcceptance) {
       return undefined;
     }
-    void syncOrdersFromServer(null, 'pending_watch');
-    pendingWatchIntervalRef.current = setInterval(() => {
-      void syncOrdersFromServer(null, 'pending_watch');
-    }, 5000);
+    const runPendingWatch = () => {
+      void (async () => {
+        await syncOrdersFromServer(null, 'pending_watch');
+        await reconcileLocalPendingOrders();
+      })();
+    };
+    runPendingWatch();
+    pendingWatchIntervalRef.current = setInterval(runPendingWatch, 4000);
     return () => {
       if (pendingWatchIntervalRef.current) {
         clearInterval(pendingWatchIntervalRef.current);
@@ -1209,6 +1314,7 @@ export function OrdersProvider({ children }) {
     manager?.storeId,
     isAppActive,
     syncOrdersFromServer,
+    reconcileLocalPendingOrders,
   ]);
 
   useEffect(() => {
@@ -1331,6 +1437,7 @@ export function OrdersProvider({ children }) {
     const handleNewOrder = (payload = {}) => {
       const eventOrderId = normalizeValue(payload?.orderId ?? payload?.id);
       if (!eventOrderId) return;
+      if (claimedAwayOrderIdsRef.current.has(eventOrderId)) return;
 
       const payloadStoreId = normalizeStoreIdValue(payload?.storeId);
       if (payloadStoreId && normalizedStoreId && payloadStoreId !== normalizedStoreId) return;
@@ -1628,6 +1735,9 @@ export function OrdersProvider({ children }) {
       if (!orderId) {
         return;
       }
+      if (claimedAwayOrderIdsRef.current.has(orderId)) {
+        return;
+      }
 
       const alreadyVisible = ordersRef.current.some(
         (order) => extractOrderIdValue(order) === orderId
@@ -1754,6 +1864,19 @@ export function OrdersProvider({ children }) {
         // Update frontend state
         updateOrderStatus(orderId, ORDER_STATUS.ACCEPTED);
         await NotificationService.dismissNotificationsForOrder(orderId);
+        try {
+          const acceptPayload = {
+            orderId,
+            storeId: manager?.storeId,
+            status: ORDER_STATUS.ACCEPTED,
+            acceptedByManagerId: manager?.id,
+            accepted_by_manager_id: manager?.id,
+          };
+          socketRef.current?.emit('order-updated', acceptPayload);
+          socketRef.current?.emit('order_accepted', acceptPayload);
+        } catch (_) {
+          /* other devices also poll order details */
+        }
         // Fetch latest to reflect any concurrent changes
         await refreshOrders(null, { force: true });
         return true;
