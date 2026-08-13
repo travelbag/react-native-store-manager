@@ -65,6 +65,24 @@ const extractOrderIdValue = (order = {}) => normalizeValue(order?.orderId ?? ord
 const extractAcceptedManagerIdValue = (order = {}) =>
   normalizeValue(order?.acceptedByManagerId ?? order?.accepted_by_manager_id);
 
+const resolvePayloadOrderStatus = (payload = {}, fallback = '') =>
+  payload?.status ??
+  payload?.orderStatus ??
+  payload?.order_status ??
+  payload?.backendStatus ??
+  fallback;
+
+const isAlreadyAcceptedByAnotherError = (errorOrMessage) => {
+  const text = String(
+    errorOrMessage?.message ?? errorOrMessage?.error ?? errorOrMessage ?? ''
+  ).toLowerCase();
+  return (
+    text.includes('already accepted') ||
+    text.includes('accepted by another') ||
+    text.includes('another manager')
+  );
+};
+
 /** Map API variants so the Assigned tab matches (`assigned` filter). */
 const ASSIGNED_ORDER_STATUS_ALIASES = new Set([
   'driver_assigned',
@@ -453,6 +471,10 @@ export function OrdersProvider({ children }) {
   const groceryOrderFetchInFlightRef = React.useRef(new Set());
   /** orderId -> timestamp: optimistic rows from push/socket not yet in server snapshot */
   const optimisticPendingOrderAtRef = React.useRef(new Map());
+  /** IDs that have appeared in at least one successful /orders/by-store snapshot */
+  const serverSeenOrderIdsRef = React.useRef(new Set());
+  const pendingAwaitingAcceptanceRef = React.useRef(false);
+  const pendingWatchIntervalRef = React.useRef(null);
   const handleNewOrderNotificationRef = React.useRef(null);
   /** null until first list snapshot; then Set of order ids last seen from fetch/poll */
   const previousPollOrderIdsRef = React.useRef(null);
@@ -480,6 +502,7 @@ export function OrdersProvider({ children }) {
 
   useEffect(() => {
     previousPollOrderIdsRef.current = null;
+    serverSeenOrderIdsRef.current = new Set();
   }, [manager?.storeId, manager?.id]);
 
   const createLocalItemId = React.useCallback((orderId, item, idx, fallbackType = 'item') => {
@@ -502,12 +525,7 @@ export function OrdersProvider({ children }) {
       const acceptedByManagerId = extractAcceptedManagerIdValue(order);
       const currentManagerId = normalizeValue(manager?.id);
 
-      if (status === ORDER_STATUS.PENDING || status === '') {
-        return true;
-      }
-
       // Shared store queue: once driver is assigned or order is terminal, every store manager must see it.
-      // (Otherwise only the accepting manager matched acceptedByManagerId and others saw an empty Assigned tab.)
       if (
         status === ORDER_STATUS.ASSIGNED ||
         status === ORDER_STATUS.COMPLETED ||
@@ -517,6 +535,15 @@ export function OrdersProvider({ children }) {
         status === 'cancelled' ||
         status === ORDER_STATUS.REJECTED
       ) {
+        return true;
+      }
+
+      // Another manager already claimed it — even if status still lags on pending.
+      if (acceptedByManagerId && currentManagerId && acceptedByManagerId !== currentManagerId) {
+        return false;
+      }
+
+      if (status === ORDER_STATUS.PENDING || status === '' || isPendingNewOrderStatus(status)) {
         return true;
       }
 
@@ -803,11 +830,27 @@ export function OrdersProvider({ children }) {
     optimisticPendingOrderAtRef.current.delete(id);
   }, []);
 
+  const dropOrderClaimedByOther = React.useCallback((orderId) => {
+    const id = normalizeValue(orderId);
+    if (!id) return;
+    clearOptimisticPendingOrder(id);
+    optimisticPendingOrderAtRef.current.delete(id);
+    groceryOrderFetchInFlightRef.current.delete(id);
+    dispatch({ type: ACTIONS.REMOVE_ORDER, payload: id });
+    void NotificationService.dismissNotificationsForOrder(id);
+  }, [clearOptimisticPendingOrder]);
+
   const applyOrdersSnapshot = React.useCallback(
     (orders) => {
       const serverIds = new Set(orders.map((o) => String(o.orderId ?? o.id ?? '')));
       const now = Date.now();
-      const OPTIMISTIC_TTL_MS = 90000;
+      // Only keep brand-new socket/push rows briefly until the first server snapshot.
+      // If the order already appeared on the server and then vanished, another manager accepted it.
+      const OPTIMISTIC_TTL_MS = 12000;
+
+      for (const id of serverIds) {
+        serverSeenOrderIdsRef.current.add(String(id));
+      }
 
       for (const [oid, addedAt] of optimisticPendingOrderAtRef.current.entries()) {
         if (serverIds.has(oid) || now - addedAt > OPTIMISTIC_TTL_MS) {
@@ -819,6 +862,7 @@ export function OrdersProvider({ children }) {
         const oid = String(order.orderId ?? order.id ?? '');
         if (!oid || serverIds.has(oid)) return false;
         if (!isPendingNewOrderStatus(order.status ?? order.orderStatus)) return false;
+        if (serverSeenOrderIdsRef.current.has(oid)) return false;
         const optimisticAt = optimisticPendingOrderAtRef.current.get(oid);
         const fetchInFlight = groceryOrderFetchInFlightRef.current.has(oid);
         return fetchInFlight || optimisticAt != null;
@@ -856,13 +900,14 @@ export function OrdersProvider({ children }) {
     [schedulePendingOrderSoundAlert, emitNewOrderReceived],
   );
 
+  const managerStoreId = manager?.storeId;
   const fetchOrdersFromDB = React.useCallback(
     async (status = null, source = 'manual') => {
-      if (!manager || !manager.storeId) {
+      if (!managerStoreId) {
         console.warn('⚠️ No storeId found for manager');
         return { ok: false, orders: null, error: 'no_store' };
       }
-      let endpoint = `/orders/by-store/${manager.storeId}`;
+      let endpoint = `/orders/by-store/${managerStoreId}`;
       if (status) endpoint += `?status=${status}`;
       try {
         const response = await apiClient.get(endpoint, {
@@ -905,6 +950,10 @@ export function OrdersProvider({ children }) {
         const normalized = Array.isArray(rawOrders)
           ? rawOrders.map(normalizeOrder).filter(Boolean)
           : [];
+        for (const order of normalized) {
+          const id = String(order?.orderId ?? order?.id ?? '');
+          if (id) serverSeenOrderIdsRef.current.add(id);
+        }
         return {
           ok: true,
           orders: normalized.filter(isOrderVisibleToManager),
@@ -920,10 +969,13 @@ export function OrdersProvider({ children }) {
         };
       }
     },
-    [manager, normalizeOrder, isOrderVisibleToManager],
+    [managerStoreId, normalizeOrder, isOrderVisibleToManager],
   );
 
   const getPollDelayMs = React.useCallback(() => {
+    if (pendingAwaitingAcceptanceRef.current) {
+      return Math.min(API_CONFIG.POLL_INTERVAL, 5000);
+    }
     const baseInterval = socketConnectedRef.current
       ? API_CONFIG.POLL_INTERVAL_SOCKET
       : API_CONFIG.POLL_INTERVAL;
@@ -1099,6 +1151,10 @@ export function OrdersProvider({ children }) {
   );
 
   useEffect(() => {
+    pendingAwaitingAcceptanceRef.current = hasPendingOrdersAwaitingAcceptance;
+  }, [hasPendingOrdersAwaitingAcceptance]);
+
+  useEffect(() => {
     let cancelled = false;
 
     const run = async () => {
@@ -1125,6 +1181,34 @@ export function OrdersProvider({ children }) {
     isAuthenticated,
     manager?.storeId,
     isAppActive,
+  ]);
+
+  // While a pending order is ringing, poll every 5s even if socket.io looks connected.
+  // Socket accept events are not reliable across all manager devices.
+  useEffect(() => {
+    if (pendingWatchIntervalRef.current) {
+      clearInterval(pendingWatchIntervalRef.current);
+      pendingWatchIntervalRef.current = null;
+    }
+    if (!isAuthenticated || !manager?.storeId || !isAppActive || !hasPendingOrdersAwaitingAcceptance) {
+      return undefined;
+    }
+    void syncOrdersFromServer(null, 'pending_watch');
+    pendingWatchIntervalRef.current = setInterval(() => {
+      void syncOrdersFromServer(null, 'pending_watch');
+    }, 5000);
+    return () => {
+      if (pendingWatchIntervalRef.current) {
+        clearInterval(pendingWatchIntervalRef.current);
+        pendingWatchIntervalRef.current = null;
+      }
+    };
+  }, [
+    hasPendingOrdersAwaitingAcceptance,
+    isAuthenticated,
+    manager?.storeId,
+    isAppActive,
+    syncOrdersFromServer,
   ]);
 
   useEffect(() => {
@@ -1279,7 +1363,38 @@ export function OrdersProvider({ children }) {
       const existingOrder = ordersRef.current.find(
         (order) => extractOrderIdValue(order) === eventOrderId
       );
-      if (!existingOrder) return;
+      const nextStatus = canonicalizeOrderStatus(
+        resolvePayloadOrderStatus(
+          payload,
+          payload?.accepted || payload?.acceptedByManagerId || payload?.accepted_by_manager_id
+            ? ORDER_STATUS.ACCEPTED
+            : existingOrder?.status
+        )
+      );
+      const acceptedBy = extractAcceptedManagerIdValue({
+        ...existingOrder,
+        ...payload,
+      });
+      const currentManagerId = normalizeValue(manager?.id);
+
+      clearOptimisticPendingOrder(eventOrderId);
+
+      if (!isPendingNewOrderStatus(nextStatus)) {
+        const claimedByOther = Boolean(
+          acceptedBy && currentManagerId && acceptedBy !== currentManagerId
+        );
+        if (claimedByOther) {
+          dropOrderClaimedByOther(eventOrderId);
+          void syncOrdersFromServer(null, 'socket_claimed');
+          return;
+        }
+      }
+
+      if (!existingOrder) {
+        void syncOrdersFromServer(null, 'socket_update');
+        return;
+      }
+
       dispatch({
         type: ACTIONS.ADD_ORDER,
         payload: {
@@ -1287,10 +1402,13 @@ export function OrdersProvider({ children }) {
           ...payload,
           id: existingOrder.id || eventOrderId,
           orderId: existingOrder.orderId || eventOrderId,
-          status: payload.status ?? existingOrder.status,
-          orderStatus: payload.status ?? existingOrder.orderStatus,
+          status: nextStatus || existingOrder.status,
+          orderStatus: nextStatus || existingOrder.orderStatus,
+          acceptedByManagerId:
+            acceptedBy || existingOrder.acceptedByManagerId || existingOrder.accepted_by_manager_id || null,
         },
       });
+      void syncOrdersFromServer(null, 'socket_update');
     };
 
     const handleSocketConnect = () => {
@@ -1305,6 +1423,11 @@ export function OrdersProvider({ children }) {
     socketClient.on('disconnect', handleSocketDisconnect);
     socketClient.on('new-order', handleNewOrder);
     socketClient.on('order-updated', handleOrderUpdated);
+    socketClient.on('order_updated', handleOrderUpdated);
+    socketClient.on('order_status_updated', handleOrderUpdated);
+    socketClient.on('order-status-updated', handleOrderUpdated);
+    socketClient.on('order_accepted', handleOrderUpdated);
+    socketClient.on('order-accepted', handleOrderUpdated);
     socketClient.on('order_cancelled', handleOrderCancelled);
     socketClient.on('order_assigned', handleOrderAssigned);
     socketClient.on('order_assignment_returned', handleOrderAssignmentReturned);
@@ -1318,6 +1441,11 @@ export function OrdersProvider({ children }) {
       socketClient.off('disconnect', handleSocketDisconnect);
       socketClient.off('new-order', handleNewOrder);
       socketClient.off('order-updated', handleOrderUpdated);
+      socketClient.off('order_updated', handleOrderUpdated);
+      socketClient.off('order_status_updated', handleOrderUpdated);
+      socketClient.off('order-status-updated', handleOrderUpdated);
+      socketClient.off('order_accepted', handleOrderUpdated);
+      socketClient.off('order-accepted', handleOrderUpdated);
       socketClient.off('order_cancelled', handleOrderCancelled);
       socketClient.off('order_assigned', handleOrderAssigned);
       socketClient.off('order_assignment_returned', handleOrderAssignmentReturned);
@@ -1326,7 +1454,19 @@ export function OrdersProvider({ children }) {
         socketRef.current = null;
       }
     };
-  }, [dispatch, emitNewOrderReceived, isAuthenticated, manager?.storeId, normalizeOrder, markOptimisticPendingOrder, schedulePendingOrderSoundAlert]);
+  }, [
+    dispatch,
+    emitNewOrderReceived,
+    isAuthenticated,
+    manager?.id,
+    manager?.storeId,
+    normalizeOrder,
+    markOptimisticPendingOrder,
+    clearOptimisticPendingOrder,
+    dropOrderClaimedByOther,
+    schedulePendingOrderSoundAlert,
+    syncOrdersFromServer,
+  ]);
 
   // Helpers to control sync polling manually (exposed via context for advanced control)
   const stopSyncPolling = () => {
@@ -1615,11 +1755,15 @@ export function OrdersProvider({ children }) {
         updateOrderStatus(orderId, ORDER_STATUS.ACCEPTED);
         await NotificationService.dismissNotificationsForOrder(orderId);
         // Fetch latest to reflect any concurrent changes
-        refreshOrders();
+        await refreshOrders(null, { force: true });
         return true;
       } else {
         console.warn('⚠️ Failed to accept order:', response.status, responseData);
         const serverMessage = responseData?.message || responseData?.error || `http_${response.status}`;
+        if (isAlreadyAcceptedByAnotherError(serverMessage)) {
+          dropOrderClaimedByOther(orderId);
+          await refreshOrders(null, { force: true });
+        }
         await showUserFacingErrorDialog(serverMessage, { action: 'accept this order' });
         return false;
       }

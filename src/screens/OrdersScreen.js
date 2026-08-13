@@ -155,7 +155,7 @@ const OrdersScreen = ({ route, navigation }) => {
   // Refresh whenever the screen gains focus for near-real-time sync across devices
   useFocusEffect(
     React.useCallback(() => {
-      refreshOrders();
+      refreshOrders(null, { force: true });
       return undefined;
     }, [refreshOrders])
   );
@@ -164,7 +164,7 @@ const OrdersScreen = ({ route, navigation }) => {
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
-        refreshOrders();
+        refreshOrders(null, { force: true });
       }
     });
     return () => subscription.remove();
