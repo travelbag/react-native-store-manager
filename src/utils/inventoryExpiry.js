@@ -93,7 +93,7 @@ export const getInventoryExpiryAlert = (value, { warnWithinDays = EXPIRY_WARN_WI
     const label =
       daysRemaining === 0
         ? 'Expires today'
-        : `${daysRemaining} day${daysRemaining === 1 ? '' : 's'} left`;
+        : `Expiring in ${daysRemaining} day${daysRemaining === 1 ? '' : 's'}`;
     return {
       status: 'expiring_soon',
       daysRemaining,

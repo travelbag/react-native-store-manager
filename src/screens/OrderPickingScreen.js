@@ -31,12 +31,9 @@ import * as Sharing from 'expo-sharing';
 import { useHardwareBarcodeWedge } from '../hooks/useHardwareBarcodeWedge';
 import { downloadMediaToLocal, isImageMediaUrl, resolvePrintItemUrl } from '../utils/mediaUrl';
 import { useAuth } from '../context/AuthContext';
-import ExpiredProductModal from '../components/ExpiredProductModal';
 import ItemExpiryBadge from '../components/ItemExpiryBadge';
-import { resolvePickExpiryState } from '../utils/resolvePickExpiry';
 import { getItemExpiryValue, getInventoryExpiryAlert } from '../utils/inventoryExpiry';
 import { confirmAppDialog, showAppDialog } from '../context/DialogContext';
-import { confirmExpiringSoonPick } from '../utils/expiryDialog';
 import { showUserFacingErrorDialog } from '../utils/userFacingError';
 import {
   isNoRacksAvailableError,
@@ -77,7 +74,6 @@ const OrderPicking = ({ route, navigation }) => {
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadingItemId, setDownloadingItemId] = useState(null);
   const [pickingDetailItem, setPickingDetailItem] = useState(null);
-  const [expiredGate, setExpiredGate] = useState(null);
   const [wedgeResume, setWedgeResume] = useState(0);
   const autoRackPromptRef = useRef(false);
   const wedgeLockRef = useRef(false);
@@ -249,60 +245,6 @@ const OrderPicking = ({ route, navigation }) => {
     return numeric ?? candidates.find((value) => value) ?? null;
   }, [manager?.storeId, manager?.store_id, order?.storeId, order?.store_id]);
 
-  const promptIfExpired = useCallback((payload) => {
-    return new Promise((resolve) => {
-      setExpiredGate({
-        productName: payload.productName,
-        expiryValue: payload.expiryValue,
-        inventoryId: payload.inventoryId,
-        resolve,
-      });
-    });
-  }, []);
-
-  const promptExpiringSoon = useCallback(
-    (payload) =>
-      confirmExpiringSoonPick({
-        productName: payload.productName,
-        expiryValue: payload.expiryValue,
-        alert: payload.alert,
-      }),
-    []
-  );
-
-  const ensureProductNotExpiredForPick = useCallback(
-    async (item, barcode) => {
-      const expiryState = await resolvePickExpiryState({
-        storeId: storeIdForPick,
-        barcode,
-        item,
-      });
-
-      if (expiryState.isExpired) {
-        Vibration.vibrate([0, 120, 80, 120]);
-        const allowed = await promptIfExpired({
-          productName: item?.name || item?.productName || barcode,
-          expiryValue: expiryState.expiryValue,
-          inventoryId: expiryState.inventoryId,
-        });
-        return Boolean(allowed);
-      }
-
-      if (expiryState.isExpiringSoon && expiryState.alert) {
-        Vibration.vibrate([0, 80, 60, 80]);
-        const allowed = await promptExpiringSoon({
-          productName: item?.name || item?.productName || barcode,
-          expiryValue: expiryState.expiryValue,
-          alert: expiryState.alert,
-        });
-        return Boolean(allowed);
-      }
-
-      return true;
-    },
-    [promptIfExpired, promptExpiringSoon, storeIdForPick]
-  );
-
   const handleWedgeBarcode = useCallback(
     async (raw) => {
       const data = String(raw || '').trim();
@@ -358,11 +300,6 @@ const OrderPicking = ({ route, navigation }) => {
       wedgeLockRef.current = true;
 
       try {
-        const canPick = await ensureProductNotExpiredForPick(item, data);
-        if (!canPick) {
-          return;
-        }
-
         // One physical scan = one unit. Qty 3 toothpaste requires 3 separate scans.
         const requiredQty = Math.max(1, Number(item.quantity ?? 1));
         const prevPicked = Math.max(
@@ -405,7 +342,6 @@ const OrderPicking = ({ route, navigation }) => {
       persistItemScan,
       updateItemStatus,
       checkOrderCompletion,
-      ensureProductNotExpiredForPick,
     ]
   );
 
@@ -1515,23 +1451,6 @@ const OrderPicking = ({ route, navigation }) => {
           </View>
         </View>
       ) : null}
-      <ExpiredProductModal
-        visible={Boolean(expiredGate)}
-        productName={expiredGate?.productName}
-        expiryValue={expiredGate?.expiryValue}
-        inventoryId={expiredGate?.inventoryId}
-        onPickAnother={() => {
-          const resolve = expiredGate?.resolve;
-          setExpiredGate(null);
-          resolve?.(false);
-          setWedgeResume((k) => k + 1);
-        }}
-        onExpiryUpdated={() => {
-          const resolve = expiredGate?.resolve;
-          setExpiredGate(null);
-          resolve?.(true);
-        }}
-      />
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

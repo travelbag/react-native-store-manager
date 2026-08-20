@@ -7,17 +7,13 @@ import {
   Vibration,
   TextInput,
   Keyboard,
-  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useHardwareBarcodeWedge } from '../hooks/useHardwareBarcodeWedge';
-import ExpiredProductModal from '../components/ExpiredProductModal';
-import { resolvePickExpiryState } from '../utils/resolvePickExpiry';
 import { showAppDialog } from '../context/DialogContext';
-import { confirmExpiringSoonPick } from '../utils/expiryDialog';
 
 const BarcodeScannerScreen = ({ route, navigation }) => {
   const {
@@ -28,9 +24,6 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
     requiredQuantity = 1,
     alreadyPickedQuantity = 0,
     scanWithCamera = false,
-    storeId = null,
-    inventoryId: inventoryIdParam = null,
-    expiryDate: expiryDateParam = null,
   } = route.params || {};
   const requiredQty = Math.max(1, Number(requiredQuantity ?? 1));
   const initialPicked = Math.min(
@@ -41,8 +34,6 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
   const [scanned, setScanned] = useState(false);
   const [unitsScanned, setUnitsScanned] = useState(initialPicked);
   const [wedgeResume, setWedgeResume] = useState(0);
-  const [checkingExpiry, setCheckingExpiry] = useState(false);
-  const [expiredGate, setExpiredGate] = useState(null);
   const cameraRef = useRef(null);
   const scanLockRef = useRef(false);
   const successAlertOpenRef = useRef(false);
@@ -52,7 +43,7 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
   // camera permissions (must run before wedge hook so `permission` is defined)
   const [permission, requestPermission] = useCameraPermissions();
 
-  const wedgeEnabled = permission != null && !scanned && !checkingExpiry && !expiredGate;
+  const wedgeEnabled = permission != null && !scanned;
 
   const { hardwareInputProps, focusCapture } = useHardwareBarcodeWedge({
     onBarcode: (data) => handleScannedValueRef.current(data),
@@ -63,15 +54,12 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
   const unlockForNextUnit = useCallback(() => {
     scanLockRef.current = false;
     setScanned(false);
-    setCheckingExpiry(false);
     setWedgeResume((k) => k + 1);
   }, []);
 
   const resetScanner = () => {
     scanLockRef.current = false;
     successAlertOpenRef.current = false;
-    setCheckingExpiry(false);
-    setExpiredGate(null);
     setScanned(false);
     unitsScannedRef.current = initialPicked;
     setUnitsScanned(initialPicked);
@@ -89,73 +77,6 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
       requestPermission();
     }
   }, [scanWithCamera, permission, requestPermission]);
-
-  const promptExpiringSoon = useCallback(
-    (payload) =>
-      confirmExpiringSoonPick({
-        productName: payload.productName || itemName,
-        expiryValue: payload.expiryValue,
-        alert: payload.alert,
-      }),
-    [itemName]
-  );
-
-  const promptIfExpired = useCallback((payload) => {
-    return new Promise((resolve) => {
-      setExpiredGate({
-        productName: payload.productName,
-        expiryValue: payload.expiryValue,
-        inventoryId: payload.inventoryId,
-        resolve,
-      });
-    });
-  }, []);
-
-  const ensureProductAllowedForScan = useCallback(
-    async (barcode) => {
-      const expiryState = await resolvePickExpiryState({
-        storeId,
-        barcode,
-        item: {
-          barcode: expectedBarcode,
-          name: itemName,
-          inventory_id: inventoryIdParam,
-          inventoryId: inventoryIdParam,
-          expiry_date: expiryDateParam,
-          expiryDate: expiryDateParam,
-        },
-      });
-
-      if (expiryState.isExpired) {
-        Vibration.vibrate([0, 120, 80, 120]);
-        return promptIfExpired({
-          productName: itemName || barcode,
-          expiryValue: expiryState.expiryValue,
-          inventoryId: expiryState.inventoryId || inventoryIdParam,
-        });
-      }
-
-      if (expiryState.isExpiringSoon && expiryState.alert) {
-        Vibration.vibrate([0, 80, 60, 80]);
-        return promptExpiringSoon({
-          productName: itemName || barcode,
-          expiryValue: expiryState.expiryValue,
-          alert: expiryState.alert,
-        });
-      }
-
-      return true;
-    },
-    [
-      storeId,
-      expectedBarcode,
-      itemName,
-      inventoryIdParam,
-      expiryDateParam,
-      promptIfExpired,
-      promptExpiringSoon,
-    ]
-  );
 
   const finishLine = useCallback(
     (quantity, scannedData) => {
@@ -233,25 +154,8 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
     [requiredQty, expectedBarcode, unlockForNextUnit, finishLine, route.params]
   );
 
-  const proceedAfterExpiryCheck = useCallback(
-    async (scannedData) => {
-      setCheckingExpiry(true);
-      try {
-        const allowed = await ensureProductAllowedForScan(scannedData || expectedBarcode);
-        if (!allowed) {
-          unlockForNextUnit();
-          return;
-        }
-        registerUnitScan(scannedData);
-      } finally {
-        setCheckingExpiry(false);
-      }
-    },
-    [ensureProductAllowedForScan, expectedBarcode, registerUnitScan, unlockForNextUnit]
-  );
-
   const handleScannedValue = (rawData) => {
-    if (scanLockRef.current || successAlertOpenRef.current || checkingExpiry) {
+    if (scanLockRef.current || successAlertOpenRef.current) {
       return;
     }
     const data = String(rawData || '').trim();
@@ -264,7 +168,7 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
     Vibration.vibrate();
 
     if (data === expectedBarcode) {
-      void proceedAfterExpiryCheck(data);
+      registerUnitScan(data);
     } else {
       showAppDialog(
         'Wrong item',
@@ -374,7 +278,7 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
           <View style={styles.scannerContainer}>
             <CameraView
               ref={cameraRef}
-              onBarcodeScanned={scanned || checkingExpiry ? undefined : handleBarCodeScanned}
+              onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
               style={styles.scanner}
               barcodeScannerSettings={{
                 barcodeTypes: [
@@ -391,39 +295,15 @@ const BarcodeScannerScreen = ({ route, navigation }) => {
             <View style={styles.overlay}>
               <View style={styles.scanFrame} />
             </View>
-            {checkingExpiry ? (
-              <View style={styles.expiryCheckOverlay}>
-                <ActivityIndicator size="large" color="#FFFFFF" />
-                <Text style={styles.expiryCheckText}>Checking expiry…</Text>
-              </View>
-            ) : null}
           </View>
 
-          {scanned && !checkingExpiry && !successAlertOpenRef.current && remaining > 0 ? (
+          {scanned && !successAlertOpenRef.current && remaining > 0 ? (
             <TouchableOpacity style={styles.rescanButton} onPress={unlockForNextUnit}>
               <Text style={styles.rescanButtonText}>Scan next unit</Text>
             </TouchableOpacity>
           ) : null}
         </>
       )}
-
-      <ExpiredProductModal
-        visible={Boolean(expiredGate)}
-        productName={expiredGate?.productName}
-        expiryValue={expiredGate?.expiryValue}
-        inventoryId={expiredGate?.inventoryId}
-        onPickAnother={() => {
-          const resolve = expiredGate?.resolve;
-          setExpiredGate(null);
-          resolve?.(false);
-          unlockForNextUnit();
-        }}
-        onExpiryUpdated={() => {
-          const resolve = expiredGate?.resolve;
-          setExpiredGate(null);
-          resolve?.(true);
-        }}
-      />
     </SafeAreaView>
   );
 };
@@ -448,17 +328,24 @@ const styles = StyleSheet.create({
     padding: 24,
     backgroundColor: '#111',
   },
-  permissionButton: {
+  message: {
+    color: '#CCCCCC',
+    fontSize: 15,
+    textAlign: 'center',
     marginTop: 16,
+    lineHeight: 22,
+  },
+  permissionButton: {
+    marginTop: 20,
     backgroundColor: '#007AFF',
     paddingHorizontal: 20,
     paddingVertical: 12,
     borderRadius: 10,
   },
-  permissionButtonText: { color: '#FFFFFF', fontWeight: '700' },
-  message: { color: '#CCCCCC', textAlign: 'center', marginTop: 12, lineHeight: 20 },
+  permissionButtonText: { color: '#FFFFFF', fontWeight: '700', fontSize: 15 },
   instruction: {
     color: '#FFFFFF',
+    fontSize: 14,
     textAlign: 'center',
     paddingHorizontal: 16,
     paddingVertical: 10,
@@ -470,9 +357,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     paddingVertical: 8,
-    backgroundColor: '#0F5132',
+    backgroundColor: 'rgba(0,122,255,0.35)',
   },
-  progressBannerText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
+  progressBannerText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
   scannerContainer: { flex: 1, position: 'relative' },
   scanner: { flex: 1 },
   overlay: {
@@ -481,21 +368,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   scanFrame: {
-    width: 250,
-    height: 250,
+    width: 260,
+    height: 160,
     borderWidth: 2,
-    borderColor: '#00FF00',
+    borderColor: '#FFFFFF',
     borderRadius: 12,
     backgroundColor: 'transparent',
   },
-  expiryCheckOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 12,
-  },
-  expiryCheckText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
   rescanButton: {
     margin: 16,
     backgroundColor: '#007AFF',
@@ -503,7 +382,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
   },
-  rescanButtonText: { color: '#FFFFFF', fontWeight: '700' },
+  rescanButtonText: { color: '#FFFFFF', fontWeight: '700', fontSize: 16 },
 });
 
 export default BarcodeScannerScreen;

@@ -691,18 +691,6 @@ export function OrdersProvider({ children }) {
     },
     [manager?.id, clearMyClaim, rememberMyClaim]
   );
-    const type = item?.item_type || item?.type || fallbackType;
-    const identityValue =
-      item?.barcode ??
-      item?.item_barcode ??
-      item?.file_name ??
-      item?.fileName ??
-      item?.item_name ??
-      item?.name ??
-      'unnamed';
-
-    return `${orderId}:${type}:${identityValue}:${idx}`;
-  }, []);
 
   const createLocalItemId = React.useCallback((orderId, item, idx, fallbackType = 'item') => {
     const type = item?.item_type || item?.type || fallbackType;

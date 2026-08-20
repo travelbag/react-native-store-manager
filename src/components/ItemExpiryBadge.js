@@ -8,7 +8,8 @@ import {
 } from '../utils/inventoryExpiry';
 
 /**
- * Shows "Expired" or "N days left" when expiry is within 30 days (or already past).
+ * Shows "Expired" or "Expiring in N days" when expiry is within 30 days (or already past).
+ * Informational only — does not block picking.
  */
 const ItemExpiryBadge = ({ item, style, showDate = true }) => {
   const expiryValue = getItemExpiryValue(item);
