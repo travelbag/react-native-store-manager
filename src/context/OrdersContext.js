@@ -188,12 +188,21 @@ function ordersReducer(state, action) {
           const orderKey = String(order.id ?? order.orderId ?? '');
           const targetKey = String(action.payload.orderId ?? '');
           if (orderKey === targetKey) {
-            return {
+            const next = {
               ...order,
               status: action.payload.status,
               orderStatus: action.payload.status,
               backendStatus: action.payload.status,
             };
+            if (action.payload.acceptedByManagerId) {
+              next.acceptedByManagerId = action.payload.acceptedByManagerId;
+              next.accepted_by_manager_id = action.payload.acceptedByManagerId;
+            }
+            if (action.payload.acceptedByManagerName) {
+              next.acceptedByManagerName = action.payload.acceptedByManagerName;
+              next.accepted_by_manager_name = action.payload.acceptedByManagerName;
+            }
+            return next;
           }
           return order;
         }),
@@ -322,6 +331,21 @@ function ordersReducer(state, action) {
                 fulfillment_type: 'pickup',
               };
             }
+          }
+          const incomingAcceptedBy = extractAcceptedManagerIdValue(merged);
+          const existingAcceptedBy = extractAcceptedManagerIdValue(existingOrder);
+          if (!incomingAcceptedBy && existingAcceptedBy) {
+            merged = {
+              ...merged,
+              acceptedByManagerId: existingAcceptedBy,
+              accepted_by_manager_id: existingAcceptedBy,
+              acceptedByManagerName:
+                merged.acceptedByManagerName ??
+                merged.accepted_by_manager_name ??
+                existingOrder?.acceptedByManagerName ??
+                existingOrder?.accepted_by_manager_name ??
+                null,
+            };
           }
           uniqueOrders.push(merged);
           seenOrderIds.add(key);
@@ -555,6 +579,17 @@ export function OrdersProvider({ children }) {
 
       if (status === ORDER_STATUS.PENDING || status === '' || isPendingNewOrderStatus(status)) {
         return true;
+      }
+
+      // Accepted / ready are private to the manager who claimed the order.
+      if (
+        status === ORDER_STATUS.ACCEPTED ||
+        status === ORDER_STATUS.READY ||
+        status === 'accepted' ||
+        status === 'ready'
+      ) {
+        if (!currentManagerId || !acceptedByManagerId) return false;
+        return acceptedByManagerId === currentManagerId;
       }
 
       if (!acceptedByManagerId) {
@@ -910,7 +945,11 @@ export function OrdersProvider({ children }) {
             if (!stillOpen) {
               dispatch({
                 type: ACTIONS.UPDATE_ORDER_STATUS,
-                payload: { orderId: id, status },
+                payload: {
+                  orderId: id,
+                  status,
+                  acceptedByManagerId: acceptedBy,
+                },
               });
             }
             return;
@@ -959,11 +998,12 @@ export function OrdersProvider({ children }) {
       });
 
       const mergedOrders = preservedLocal.length > 0 ? [...visibleOrders, ...preservedLocal] : visibleOrders;
+      const managerVisibleOrders = mergedOrders.filter(isOrderVisibleToManager);
 
-      const ids = new Set(mergedOrders.map((o) => String(o.orderId ?? o.id ?? '')));
+      const ids = new Set(managerVisibleOrders.map((o) => String(o.orderId ?? o.id ?? '')));
       const prev = previousPollOrderIdsRef.current;
       if (prev !== null) {
-        for (const order of mergedOrders) {
+        for (const order of managerVisibleOrders) {
           const oid = String(order.orderId ?? order.id ?? '');
           if (prev.has(oid)) continue;
           if (isPendingNewOrderStatus(order.status ?? order.orderStatus)) {
@@ -973,7 +1013,7 @@ export function OrdersProvider({ children }) {
         }
       }
       previousPollOrderIdsRef.current = ids;
-      const signature = mergedOrders
+      const signature = managerVisibleOrders
         .map((order) => {
           const id = String(order.orderId ?? order.id ?? '');
           const status = String(order.status ?? order.orderStatus ?? '');
@@ -986,9 +1026,9 @@ export function OrdersProvider({ children }) {
         return;
       }
       lastSnapshotSignatureRef.current = signature;
-      dispatch({ type: ACTIONS.SET_ORDERS, payload: mergedOrders });
+      dispatch({ type: ACTIONS.SET_ORDERS, payload: managerVisibleOrders });
     },
-    [schedulePendingOrderSoundAlert, emitNewOrderReceived],
+    [schedulePendingOrderSoundAlert, emitNewOrderReceived, isOrderVisibleToManager],
   );
 
   const managerStoreId = manager?.storeId;
@@ -1502,18 +1542,28 @@ export function OrdersProvider({ children }) {
         return;
       }
 
+      const updatedOrder = {
+        ...existingOrder,
+        ...payload,
+        id: existingOrder.id || eventOrderId,
+        orderId: existingOrder.orderId || eventOrderId,
+        status: nextStatus || existingOrder.status,
+        orderStatus: nextStatus || existingOrder.orderStatus,
+        acceptedByManagerId:
+          acceptedBy || existingOrder.acceptedByManagerId || existingOrder.accepted_by_manager_id || null,
+        accepted_by_manager_id:
+          acceptedBy || existingOrder.acceptedByManagerId || existingOrder.accepted_by_manager_id || null,
+      };
+
+      if (!isOrderVisibleToManager(updatedOrder)) {
+        dropOrderClaimedByOther(eventOrderId);
+        void syncOrdersFromServer(null, 'socket_claimed');
+        return;
+      }
+
       dispatch({
         type: ACTIONS.ADD_ORDER,
-        payload: {
-          ...existingOrder,
-          ...payload,
-          id: existingOrder.id || eventOrderId,
-          orderId: existingOrder.orderId || eventOrderId,
-          status: nextStatus || existingOrder.status,
-          orderStatus: nextStatus || existingOrder.orderStatus,
-          acceptedByManagerId:
-            acceptedBy || existingOrder.acceptedByManagerId || existingOrder.accepted_by_manager_id || null,
-        },
+        payload: updatedOrder,
       });
       void syncOrdersFromServer(null, 'socket_update');
     };
@@ -1573,6 +1623,7 @@ export function OrdersProvider({ children }) {
     dropOrderClaimedByOther,
     schedulePendingOrderSoundAlert,
     syncOrdersFromServer,
+    isOrderVisibleToManager,
   ]);
 
   // Helpers to control sync polling manually (exposed via context for advanced control)
@@ -1828,8 +1879,11 @@ export function OrdersProvider({ children }) {
     dispatch({ type: ACTIONS.ADD_ORDER, payload: order });
   };
 
-  const updateOrderStatus = (orderId, status) => {
-    dispatch({ type: ACTIONS.UPDATE_ORDER_STATUS, payload: { orderId, status } });
+  const updateOrderStatus = (orderId, status, claimMeta = {}) => {
+    dispatch({
+      type: ACTIONS.UPDATE_ORDER_STATUS,
+      payload: { orderId, status, ...claimMeta },
+    });
   };
 
   const acceptOrder = async (orderId) => {
@@ -1837,7 +1891,13 @@ export function OrdersProvider({ children }) {
     try {
       const endpoint = `/orders/${orderId}/status`;
       const fullUrl = buildApiUrl(endpoint);
-      const payload = { status: ORDER_STATUS.ACCEPTED };
+      const payload = {
+        status: ORDER_STATUS.ACCEPTED,
+        acceptedByManagerId: manager?.id,
+        accepted_by_manager_id: manager?.id,
+        acceptedByManagerName: manager?.name,
+        accepted_by_manager_name: manager?.name,
+      };
       console.log('🔄 Sending accept order request to backend...', {
         endpoint,
         fullUrl,
@@ -1861,8 +1921,36 @@ export function OrdersProvider({ children }) {
       
       if (response.ok) {
         console.log('✅ Order accepted successfully in backend');
-        // Update frontend state
-        updateOrderStatus(orderId, ORDER_STATUS.ACCEPTED);
+        const responseOrder = responseData?.order ?? responseData?.data ?? responseData;
+        const acceptedByManagerId =
+          extractAcceptedManagerIdValue(responseOrder) || normalizeValue(manager?.id);
+        const existingOrder = ordersRef.current.find(
+          (order) => extractOrderIdValue(order) === normalizeValue(orderId)
+        );
+        if (existingOrder) {
+          dispatch({
+            type: ACTIONS.ADD_ORDER,
+            payload: {
+              ...existingOrder,
+              ...(responseOrder && typeof responseOrder === 'object' ? responseOrder : {}),
+              status: ORDER_STATUS.ACCEPTED,
+              orderStatus: ORDER_STATUS.ACCEPTED,
+              backendStatus: ORDER_STATUS.ACCEPTED,
+              acceptedByManagerId,
+              accepted_by_manager_id: acceptedByManagerId,
+              acceptedByManagerName:
+                responseOrder?.acceptedByManagerName ??
+                responseOrder?.accepted_by_manager_name ??
+                manager?.name ??
+                null,
+            },
+          });
+        } else {
+          updateOrderStatus(orderId, ORDER_STATUS.ACCEPTED, {
+            acceptedByManagerId,
+            acceptedByManagerName: manager?.name,
+          });
+        }
         await NotificationService.dismissNotificationsForOrder(orderId);
         try {
           const acceptPayload = {
@@ -1871,6 +1959,8 @@ export function OrdersProvider({ children }) {
             status: ORDER_STATUS.ACCEPTED,
             acceptedByManagerId: manager?.id,
             accepted_by_manager_id: manager?.id,
+            acceptedByManagerName: manager?.name,
+            accepted_by_manager_name: manager?.name,
           };
           socketRef.current?.emit('order-updated', acceptPayload);
           socketRef.current?.emit('order_accepted', acceptPayload);
@@ -2258,8 +2348,16 @@ export function OrdersProvider({ children }) {
     dispatch({ type: ACTIONS.REMOVE_ORDER, payload: orderId });
   };
 
+  const visibleOrdersForManager = React.useMemo(
+    () =>
+      Array.isArray(state.orders)
+        ? state.orders.filter(isOrderVisibleToManager)
+        : [],
+    [state.orders, isOrderVisibleToManager]
+  );
+
   const value = {
-    orders: state.orders,
+    orders: visibleOrdersForManager,
     loading: state.loading,
     error: state.error,
     addOrder,
