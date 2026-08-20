@@ -114,7 +114,12 @@ const OrderPicking = ({ route, navigation }) => {
   // Find the current order (normalize id types so list updates always match this screen)
   useEffect(() => {
     const currentOrder = orders.find((o) => sameOrderId(o, orderId));
-    setOrder(currentOrder);
+    if (currentOrder) {
+      setOrder(currentOrder);
+      return;
+    }
+    // Keep the last known order during brief sync gaps so picking never blanks out.
+    setOrder((prev) => (prev && sameOrderId(prev, orderId) ? prev : null));
   }, [orders, orderId]);
 
   // Check for cancellation on screen focus and stop picking if cancelled

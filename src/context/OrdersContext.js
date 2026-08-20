@@ -125,6 +125,23 @@ const canonicalizeOrderStatus = (value) => {
   return s;
 };
 
+/** Higher = further along. Used to block stale list polls from undoing accept/pick. */
+const getOrderStatusRank = (status) => {
+  const s = canonicalizeOrderStatus(status);
+  if (isPendingNewOrderStatus(s)) return 1;
+  if (s === ORDER_STATUS.ACCEPTED) return 2;
+  if (s === ORDER_STATUS.READY) return 3;
+  if (s === ORDER_STATUS.ASSIGNED) return 4;
+  if (s === ORDER_STATUS.COMPLETED || s === 'delivered') return 5;
+  if (s === 'cancelled' || s === ORDER_STATUS.REJECTED) return 6;
+  return 0;
+};
+
+const isClaimedInProgressStatus = (status) => {
+  const s = canonicalizeOrderStatus(status);
+  return s === ORDER_STATUS.ACCEPTED || s === ORDER_STATUS.READY;
+};
+
 export const isPickupFulfillmentOrder = (order = {}) => {
   const fulfillment = String(order?.fulfillmentType ?? order?.fulfillment_type ?? '')
     .trim()
@@ -185,9 +202,9 @@ function ordersReducer(state, action) {
       return {
         ...state,
         orders: state.orders.map(order => {
-          const orderKey = String(order.id ?? order.orderId ?? '');
-          const targetKey = String(action.payload.orderId ?? '');
-          if (orderKey === targetKey) {
+          const orderKey = extractOrderIdValue(order);
+          const targetKey = normalizeValue(action.payload.orderId);
+          if (orderKey && targetKey && orderKey === targetKey) {
             const next = {
               ...order,
               status: action.payload.status,
@@ -346,6 +363,38 @@ function ordersReducer(state, action) {
                 existingOrder?.accepted_by_manager_name ??
                 null,
             };
+          }
+          // Stale /orders/by-store polls often omit claim fields or still say pending
+          // right after accept — never downgrade a local accepted/ready claim to pending.
+          if (existingOrder) {
+            const existingStatus = canonicalizeOrderStatus(
+              existingOrder.status ?? existingOrder.orderStatus
+            );
+            const incomingStatus = canonicalizeOrderStatus(
+              merged.status ?? merged.orderStatus
+            );
+            const effectiveAcceptedBy =
+              extractAcceptedManagerIdValue(merged) || existingAcceptedBy;
+            if (
+              isClaimedInProgressStatus(existingStatus) &&
+              getOrderStatusRank(incomingStatus) < getOrderStatusRank(existingStatus) &&
+              getOrderStatusRank(incomingStatus) <= 1
+            ) {
+              merged = {
+                ...merged,
+                status: existingStatus,
+                orderStatus: existingStatus,
+                backendStatus: existingStatus,
+                acceptedByManagerId: effectiveAcceptedBy || existingAcceptedBy || null,
+                accepted_by_manager_id: effectiveAcceptedBy || existingAcceptedBy || null,
+                acceptedByManagerName:
+                  merged.acceptedByManagerName ??
+                  merged.accepted_by_manager_name ??
+                  existingOrder?.acceptedByManagerName ??
+                  existingOrder?.accepted_by_manager_name ??
+                  null,
+              };
+            }
           }
           uniqueOrders.push(merged);
           seenOrderIds.add(key);
@@ -506,6 +555,12 @@ export function OrdersProvider({ children }) {
   const serverSeenOrderIdsRef = React.useRef(new Set());
   /** Orders already confirmed claimed by another picker — never re-add from a stale list poll. */
   const claimedAwayOrderIdsRef = React.useRef(new Set());
+  /**
+   * Sticky local claims for THIS manager (accept → ready). Survives stale list polls that
+   * omit acceptedBy / still say pending, so the order cannot vanish while picking.
+   * orderId -> { status, acceptedByManagerId, acceptedByManagerName }
+   */
+  const myActiveClaimsRef = React.useRef(new Map());
   const pendingAwaitingAcceptanceRef = React.useRef(false);
   const pendingWatchIntervalRef = React.useRef(null);
   const handleNewOrderNotificationRef = React.useRef(null);
@@ -537,7 +592,117 @@ export function OrdersProvider({ children }) {
     previousPollOrderIdsRef.current = null;
     serverSeenOrderIdsRef.current = new Set();
     claimedAwayOrderIdsRef.current = new Set();
+    myActiveClaimsRef.current = new Map();
   }, [manager?.storeId, manager?.id]);
+
+  const rememberMyClaim = React.useCallback((orderId, claim = {}) => {
+    const id = normalizeValue(orderId);
+    if (!id) return;
+    const prev = myActiveClaimsRef.current.get(id) || {};
+    myActiveClaimsRef.current.set(id, {
+      status: canonicalizeOrderStatus(claim.status ?? prev.status ?? ORDER_STATUS.ACCEPTED),
+      acceptedByManagerId:
+        normalizeValue(claim.acceptedByManagerId) ||
+        prev.acceptedByManagerId ||
+        normalizeValue(manager?.id),
+      acceptedByManagerName:
+        claim.acceptedByManagerName ?? prev.acceptedByManagerName ?? manager?.name ?? null,
+      rememberedAt: Date.now(),
+    });
+    // If we just claimed it, it cannot be on the "claimed away" blacklist.
+    claimedAwayOrderIdsRef.current.delete(id);
+  }, [manager?.id, manager?.name]);
+
+  const clearMyClaim = React.useCallback((orderId) => {
+    const id = normalizeValue(orderId);
+    if (!id) return;
+    myActiveClaimsRef.current.delete(id);
+  }, []);
+
+  const applyLocalClaimToOrder = React.useCallback(
+    (order) => {
+      if (!order) return order;
+      const id = extractOrderIdValue(order);
+      const claim = id ? myActiveClaimsRef.current.get(id) : null;
+      if (!claim) return order;
+
+      const incomingStatus = canonicalizeOrderStatus(order.status ?? order.orderStatus);
+      const claimStatus = canonicalizeOrderStatus(claim.status);
+      const incomingAcceptedBy = extractAcceptedManagerIdValue(order);
+      const me = normalizeValue(manager?.id);
+      const claimAcceptedBy = normalizeValue(claim.acceptedByManagerId) || me;
+
+      // Another manager truly owns it now — drop our sticky claim.
+      if (incomingAcceptedBy && me && incomingAcceptedBy !== me) {
+        clearMyClaim(id);
+        return order;
+      }
+
+      // Terminal / shared statuses: sticky claim no longer needed.
+      if (
+        incomingStatus === ORDER_STATUS.ASSIGNED ||
+        incomingStatus === ORDER_STATUS.COMPLETED ||
+        incomingStatus === 'cancelled' ||
+        incomingStatus === ORDER_STATUS.REJECTED
+      ) {
+        clearMyClaim(id);
+        return order;
+      }
+
+      let next = order;
+      if (!incomingAcceptedBy && claimAcceptedBy) {
+        next = {
+          ...next,
+          acceptedByManagerId: claimAcceptedBy,
+          accepted_by_manager_id: claimAcceptedBy,
+          acceptedByManagerName:
+            next.acceptedByManagerName ??
+            next.accepted_by_manager_name ??
+            claim.acceptedByManagerName ??
+            null,
+        };
+      }
+
+      if (
+        isClaimedInProgressStatus(claimStatus) &&
+        getOrderStatusRank(incomingStatus) < getOrderStatusRank(claimStatus)
+      ) {
+        next = {
+          ...next,
+          status: claimStatus,
+          orderStatus: claimStatus,
+          backendStatus: claimStatus,
+          acceptedByManagerId:
+            extractAcceptedManagerIdValue(next) || claimAcceptedBy || null,
+          accepted_by_manager_id:
+            extractAcceptedManagerIdValue(next) || claimAcceptedBy || null,
+        };
+      } else if (isClaimedInProgressStatus(incomingStatus)) {
+        // Keep claim status in sync as we progress accepted → ready.
+        rememberMyClaim(id, {
+          status: incomingStatus,
+          acceptedByManagerId: extractAcceptedManagerIdValue(next) || claimAcceptedBy,
+          acceptedByManagerName:
+            next.acceptedByManagerName ?? next.accepted_by_manager_name ?? claim.acceptedByManagerName,
+        });
+      }
+
+      return next;
+    },
+    [manager?.id, clearMyClaim, rememberMyClaim]
+  );
+    const type = item?.item_type || item?.type || fallbackType;
+    const identityValue =
+      item?.barcode ??
+      item?.item_barcode ??
+      item?.file_name ??
+      item?.fileName ??
+      item?.item_name ??
+      item?.name ??
+      'unnamed';
+
+    return `${orderId}:${type}:${identityValue}:${idx}`;
+  }, []);
 
   const createLocalItemId = React.useCallback((orderId, item, idx, fallbackType = 'item') => {
     const type = item?.item_type || item?.type || fallbackType;
@@ -555,6 +720,17 @@ export function OrdersProvider({ children }) {
 
   const isOrderVisibleToManager = React.useCallback(
     (order) => {
+      const id = extractOrderIdValue(order);
+      // Sticky local claim always stays visible to this manager while picking.
+      if (id && myActiveClaimsRef.current.has(id)) {
+        const acceptedByManagerId = extractAcceptedManagerIdValue(order);
+        const currentManagerId = normalizeValue(manager?.id);
+        if (acceptedByManagerId && currentManagerId && acceptedByManagerId !== currentManagerId) {
+          return false;
+        }
+        return true;
+      }
+
       const status = normalizeStatusValue(order?.status ?? order?.orderStatus);
       const acceptedByManagerId = extractAcceptedManagerIdValue(order);
       const currentManagerId = normalizeValue(manager?.id);
@@ -582,13 +758,16 @@ export function OrdersProvider({ children }) {
       }
 
       // Accepted / ready are private to the manager who claimed the order.
+      // If the API omits acceptedByManagerId, do NOT hide the row — that was making
+      // the accepting device lose the order until logout cleared claim blacklists.
       if (
         status === ORDER_STATUS.ACCEPTED ||
         status === ORDER_STATUS.READY ||
         status === 'accepted' ||
         status === 'ready'
       ) {
-        if (!currentManagerId || !acceptedByManagerId) return false;
+        if (!acceptedByManagerId) return true;
+        if (!currentManagerId) return true;
         return acceptedByManagerId === currentManagerId;
       }
 
@@ -890,6 +1069,7 @@ export function OrdersProvider({ children }) {
   const dropOrderClaimedByOther = React.useCallback((orderId) => {
     const id = normalizeValue(orderId);
     if (!id) return;
+    myActiveClaimsRef.current.delete(id);
     claimedAwayOrderIdsRef.current.add(id);
     clearOptimisticPendingOrder(id);
     optimisticPendingOrderAtRef.current.delete(id);
@@ -966,7 +1146,8 @@ export function OrdersProvider({ children }) {
 
   const applyOrdersSnapshot = React.useCallback(
     (orders) => {
-      const visibleOrders = (orders || []).filter((order) => {
+      const enrichedIncoming = (orders || []).map(applyLocalClaimToOrder);
+      const visibleOrders = enrichedIncoming.filter((order) => {
         const id = String(order?.orderId ?? order?.id ?? '');
         return id && !claimedAwayOrderIdsRef.current.has(id);
       });
@@ -990,12 +1171,25 @@ export function OrdersProvider({ children }) {
         const oid = String(order.orderId ?? order.id ?? '');
         if (!oid || serverIds.has(oid)) return false;
         if (claimedAwayOrderIdsRef.current.has(oid)) return false;
+
+        // Keep my in-progress claim even if this poll omitted the row entirely.
+        if (myActiveClaimsRef.current.has(oid)) {
+          return true;
+        }
+
+        const me = normalizeValue(manager?.id);
+        const acceptedBy = extractAcceptedManagerIdValue(order);
+        const status = canonicalizeOrderStatus(order.status ?? order.orderStatus);
+        if (me && acceptedBy === me && isClaimedInProgressStatus(status)) {
+          return true;
+        }
+
         if (!isPendingNewOrderStatus(order.status ?? order.orderStatus)) return false;
         if (serverSeenOrderIdsRef.current.has(oid)) return false;
         const optimisticAt = optimisticPendingOrderAtRef.current.get(oid);
         const fetchInFlight = groceryOrderFetchInFlightRef.current.has(oid);
         return fetchInFlight || optimisticAt != null;
-      });
+      }).map(applyLocalClaimToOrder);
 
       const mergedOrders = preservedLocal.length > 0 ? [...visibleOrders, ...preservedLocal] : visibleOrders;
       const managerVisibleOrders = mergedOrders.filter(isOrderVisibleToManager);
@@ -1028,7 +1222,13 @@ export function OrdersProvider({ children }) {
       lastSnapshotSignatureRef.current = signature;
       dispatch({ type: ACTIONS.SET_ORDERS, payload: managerVisibleOrders });
     },
-    [schedulePendingOrderSoundAlert, emitNewOrderReceived, isOrderVisibleToManager],
+    [
+      schedulePendingOrderSoundAlert,
+      emitNewOrderReceived,
+      isOrderVisibleToManager,
+      applyLocalClaimToOrder,
+      manager?.id,
+    ],
   );
 
   const managerStoreId = manager?.storeId;
@@ -1079,7 +1279,7 @@ export function OrdersProvider({ children }) {
 
         const rawOrders = data.orders || data || [];
         const normalized = Array.isArray(rawOrders)
-          ? rawOrders.map(normalizeOrder).filter(Boolean)
+          ? rawOrders.map(normalizeOrder).filter(Boolean).map(applyLocalClaimToOrder)
           : [];
         for (const order of normalized) {
           const id = String(order?.orderId ?? order?.id ?? '');
@@ -1104,7 +1304,7 @@ export function OrdersProvider({ children }) {
         };
       }
     },
-    [managerStoreId, normalizeOrder, isOrderVisibleToManager],
+    [managerStoreId, normalizeOrder, isOrderVisibleToManager, applyLocalClaimToOrder],
   );
 
   const getPollDelayMs = React.useCallback(() => {
@@ -1188,9 +1388,10 @@ export function OrdersProvider({ children }) {
         if (!force && now - lastFetchAtRef.current < 1500) {
           return ordersRef.current;
         }
-        const result = await syncOrdersFromServer(status, 'manual');
+        await syncOrdersFromServer(status, 'manual');
         lastFetchAtRef.current = Date.now();
-        return result.orders;
+        // Always return merged local state (includes sticky claims preserved across stale polls).
+        return ordersRef.current;
       } catch (e) {
         console.warn('⚠️ Failed to refresh orders:', e);
         return ordersRef.current;
@@ -1389,6 +1590,8 @@ export function OrdersProvider({ children }) {
       const payloadStoreId = normalizeStoreIdValue(payload?.storeId);
       if (payloadStoreId && normalizedStoreId && payloadStoreId !== normalizedStoreId) return;
 
+      clearMyClaim(eventOrderId);
+
       const existingOrder = ordersRef.current.find(
         (order) => extractOrderIdValue(order) === eventOrderId
       );
@@ -1424,6 +1627,8 @@ export function OrdersProvider({ children }) {
 
       const payloadStoreId = normalizeStoreIdValue(payload?.storeId);
       if (payloadStoreId && normalizedStoreId && payloadStoreId !== normalizedStoreId) return;
+
+      clearMyClaim(eventOrderId);
 
       const existingOrder = ordersRef.current.find(
         (order) => extractOrderIdValue(order) === eventOrderId
@@ -1538,11 +1743,24 @@ export function OrdersProvider({ children }) {
       }
 
       if (!existingOrder) {
+        // If this is our own accept echo and the row isn't loaded yet, still remember claim.
+        if (
+          currentManagerId &&
+          acceptedBy === currentManagerId &&
+          isClaimedInProgressStatus(nextStatus)
+        ) {
+          rememberMyClaim(eventOrderId, {
+            status: nextStatus,
+            acceptedByManagerId: acceptedBy,
+            acceptedByManagerName:
+              payload?.acceptedByManagerName ?? payload?.accepted_by_manager_name,
+          });
+        }
         void syncOrdersFromServer(null, 'socket_update');
         return;
       }
 
-      const updatedOrder = {
+      const updatedOrder = applyLocalClaimToOrder({
         ...existingOrder,
         ...payload,
         id: existingOrder.id || eventOrderId,
@@ -1553,9 +1771,44 @@ export function OrdersProvider({ children }) {
           acceptedBy || existingOrder.acceptedByManagerId || existingOrder.accepted_by_manager_id || null,
         accepted_by_manager_id:
           acceptedBy || existingOrder.acceptedByManagerId || existingOrder.accepted_by_manager_id || null,
-      };
+      });
+
+      if (
+        currentManagerId &&
+        extractAcceptedManagerIdValue(updatedOrder) === currentManagerId &&
+        isClaimedInProgressStatus(updatedOrder.status ?? updatedOrder.orderStatus)
+      ) {
+        rememberMyClaim(eventOrderId, {
+          status: updatedOrder.status,
+          acceptedByManagerId: extractAcceptedManagerIdValue(updatedOrder),
+          acceptedByManagerName:
+            updatedOrder.acceptedByManagerName ?? updatedOrder.accepted_by_manager_name,
+        });
+      }
 
       if (!isOrderVisibleToManager(updatedOrder)) {
+        const claimedByMe = Boolean(
+          extractAcceptedManagerIdValue(updatedOrder) &&
+            currentManagerId &&
+            extractAcceptedManagerIdValue(updatedOrder) === currentManagerId
+        );
+        // Never permanently blacklist our own in-progress claim.
+        if (claimedByMe || myActiveClaimsRef.current.has(eventOrderId)) {
+          dispatch({
+            type: ACTIONS.ADD_ORDER,
+            payload: updatedOrder,
+          });
+          void syncOrdersFromServer(null, 'socket_update');
+          return;
+        }
+        if (isClaimedInProgressStatus(nextStatus) && !acceptedBy) {
+          dispatch({
+            type: ACTIONS.ADD_ORDER,
+            payload: updatedOrder,
+          });
+          void syncOrdersFromServer(null, 'socket_update');
+          return;
+        }
         dropOrderClaimedByOther(eventOrderId);
         void syncOrdersFromServer(null, 'socket_claimed');
         return;
@@ -1624,6 +1877,9 @@ export function OrdersProvider({ children }) {
     schedulePendingOrderSoundAlert,
     syncOrdersFromServer,
     isOrderVisibleToManager,
+    applyLocalClaimToOrder,
+    rememberMyClaim,
+    clearMyClaim,
   ]);
 
   // Helpers to control sync polling manually (exposed via context for advanced control)
@@ -1924,6 +2180,16 @@ export function OrdersProvider({ children }) {
         const responseOrder = responseData?.order ?? responseData?.data ?? responseData;
         const acceptedByManagerId =
           extractAcceptedManagerIdValue(responseOrder) || normalizeValue(manager?.id);
+        const acceptedByManagerName =
+          responseOrder?.acceptedByManagerName ??
+          responseOrder?.accepted_by_manager_name ??
+          manager?.name ??
+          null;
+        rememberMyClaim(orderId, {
+          status: ORDER_STATUS.ACCEPTED,
+          acceptedByManagerId,
+          acceptedByManagerName,
+        });
         const existingOrder = ordersRef.current.find(
           (order) => extractOrderIdValue(order) === normalizeValue(orderId)
         );
@@ -1932,23 +2198,24 @@ export function OrdersProvider({ children }) {
             type: ACTIONS.ADD_ORDER,
             payload: {
               ...existingOrder,
-              ...(responseOrder && typeof responseOrder === 'object' ? responseOrder : {}),
               status: ORDER_STATUS.ACCEPTED,
               orderStatus: ORDER_STATUS.ACCEPTED,
               backendStatus: ORDER_STATUS.ACCEPTED,
               acceptedByManagerId,
               accepted_by_manager_id: acceptedByManagerId,
-              acceptedByManagerName:
-                responseOrder?.acceptedByManagerName ??
-                responseOrder?.accepted_by_manager_name ??
-                manager?.name ??
-                null,
+              acceptedByManagerName,
+              accepted_by_manager_name: acceptedByManagerName,
+              acceptedAt:
+                responseOrder?.acceptedAt ??
+                responseOrder?.accepted_at ??
+                existingOrder.acceptedAt ??
+                new Date().toISOString(),
             },
           });
         } else {
           updateOrderStatus(orderId, ORDER_STATUS.ACCEPTED, {
             acceptedByManagerId,
-            acceptedByManagerName: manager?.name,
+            acceptedByManagerName,
           });
         }
         await NotificationService.dismissNotificationsForOrder(orderId);
@@ -1967,8 +2234,8 @@ export function OrdersProvider({ children }) {
         } catch (_) {
           /* other devices also poll order details */
         }
-        // Fetch latest to reflect any concurrent changes
-        await refreshOrders(null, { force: true });
+        // Refresh in background; sticky claim + SET_ORDERS merge keep local accepted state.
+        void refreshOrders(null, { force: true });
         return true;
       } else {
         console.warn('⚠️ Failed to accept order:', response.status, responseData);
@@ -2041,21 +2308,48 @@ export function OrdersProvider({ children }) {
         })
       : null;
     const updatedOrderFromApi = responseData?.order ? normalizeOrder(responseData.order) : normalizedTopLevelReadyResponse;
+    const claimAcceptedBy =
+      extractAcceptedManagerIdValue(updatedOrderFromApi) ||
+      extractAcceptedManagerIdValue(existingOrder) ||
+      normalizeValue(manager?.id);
+    rememberMyClaim(orderId, {
+      status: ORDER_STATUS.READY,
+      acceptedByManagerId: claimAcceptedBy,
+      acceptedByManagerName:
+        updatedOrderFromApi?.acceptedByManagerName ??
+        existingOrder?.acceptedByManagerName ??
+        manager?.name ??
+        null,
+    });
     if (updatedOrderFromApi) {
-      dispatch({ type: ACTIONS.ADD_ORDER, payload: updatedOrderFromApi });
+      dispatch({
+        type: ACTIONS.ADD_ORDER,
+        payload: applyLocalClaimToOrder({
+          ...updatedOrderFromApi,
+          status: ORDER_STATUS.READY,
+          orderStatus: ORDER_STATUS.READY,
+          backendStatus: ORDER_STATUS.READY,
+          acceptedByManagerId: claimAcceptedBy,
+          accepted_by_manager_id: claimAcceptedBy,
+        }),
+      });
     } else {
       if (existingOrder) {
         dispatch({
           type: ACTIONS.ADD_ORDER,
-          payload: {
+          payload: applyLocalClaimToOrder({
             ...existingOrder,
             status: ORDER_STATUS.READY,
             orderStatus: ORDER_STATUS.READY,
             backendStatus: ORDER_STATUS.READY,
-          },
+            acceptedByManagerId: claimAcceptedBy,
+            accepted_by_manager_id: claimAcceptedBy,
+          }),
         });
       } else {
-        updateOrderStatus(orderId, ORDER_STATUS.READY);
+        updateOrderStatus(orderId, ORDER_STATUS.READY, {
+          acceptedByManagerId: claimAcceptedBy,
+        });
       }
     }
     try {
