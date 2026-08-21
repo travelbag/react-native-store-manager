@@ -31,8 +31,7 @@ import * as Sharing from 'expo-sharing';
 import { useHardwareBarcodeWedge } from '../hooks/useHardwareBarcodeWedge';
 import { downloadMediaToLocal, isImageMediaUrl, resolvePrintItemUrl } from '../utils/mediaUrl';
 import { useAuth } from '../context/AuthContext';
-import ItemExpiryBadge from '../components/ItemExpiryBadge';
-import { getItemExpiryValue, getInventoryExpiryAlert } from '../utils/inventoryExpiry';
+import { formatInventoryExpiryDisplay, getItemExpiryValue } from '../utils/inventoryExpiry';
 import { confirmAppDialog, showAppDialog } from '../context/DialogContext';
 import { showUserFacingErrorDialog } from '../utils/userFacingError';
 import {
@@ -824,8 +823,6 @@ const OrderPicking = ({ route, navigation }) => {
       alreadyPickedQuantity: alreadyPicked,
       scanWithCamera: useCamera,
       storeId: storeIdForPick,
-      inventoryId: item.inventory_id || item.inventoryId || null,
-      expiryDate: item.expiry_date || item.expiryDate || null,
       onScanSuccess: async (scannedBarcode, quantity) => {
         const totalPicked = Math.max(1, Number(quantity ?? requiredQuantity));
         pickedQtyByItemRef.current[item.id] = totalPicked;
@@ -865,24 +862,24 @@ const OrderPicking = ({ route, navigation }) => {
 
   const renderItemExpiryLine = (item) => {
     if (isPrintItem(item)) return null;
-    return <ItemExpiryBadge item={item} />;
+    // Show expiry date only after the line is picked — never as a pre-scan alert.
+    if (item.status !== ITEM_STATUS.SCANNED) return null;
+    const expiryValue = getItemExpiryValue(item);
+    if (!expiryValue) return null;
+    return (
+      <Text style={styles.pickedExpiryText}>
+        Expiry: {formatInventoryExpiryDisplay(expiryValue)}
+      </Text>
+    );
   };
 
   const renderItemExpiryDetailLine = (item) => {
     if (isPrintItem(item)) return null;
     const expiryValue = getItemExpiryValue(item);
-    const alert = getInventoryExpiryAlert(expiryValue);
-    if (!alert) return null;
+    if (!expiryValue) return null;
     return (
-      <Text
-        style={
-          alert.status === 'expired'
-            ? styles.pickingDetailExpiryExpired
-            : styles.pickingDetailExpirySoon
-        }
-      >
-        Expiry: {alert.label}
-        {expiryValue ? ` (${String(expiryValue).slice(0, 10)})` : ''}
+      <Text style={styles.pickingDetailExpiryText}>
+        Expiry: {formatInventoryExpiryDisplay(expiryValue)}
       </Text>
     );
   };
@@ -956,6 +953,7 @@ const OrderPicking = ({ route, navigation }) => {
               Weight: {weightLabel}
             </Text>
           ) : null}
+          {picked && !printItem ? renderItemExpiryLine(item) : null}
           {!printItem ? renderBarcodeHighlight(barcodeValue) : null}
           <Text style={styles.itemCardCompactHint}>Tap for details</Text>
         </TouchableOpacity>
@@ -997,7 +995,6 @@ const OrderPicking = ({ route, navigation }) => {
                   </View>
                 </View>
                 {renderBarcodeHighlight(barcodeValue)}
-                {renderItemExpiryLine(item)}
               </>
             )}
           </View>
@@ -1654,19 +1651,18 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     lineHeight: 20,
   },
-  pickingDetailExpiryExpired: {
+  pickingDetailExpiryText: {
     fontSize: 14,
-    fontWeight: '700',
-    color: '#B91C1C',
+    fontWeight: '500',
+    color: '#475569',
     marginBottom: 8,
     lineHeight: 20,
   },
-  pickingDetailExpirySoon: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#B45309',
-    marginBottom: 8,
-    lineHeight: 20,
+  pickedExpiryText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#475569',
+    marginTop: 4,
   },
   pickingDetailMeta: {
     fontSize: 12,

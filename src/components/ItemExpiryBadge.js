@@ -1,82 +1,32 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { Text, StyleSheet } from 'react-native';
 import {
   formatInventoryExpiryDisplay,
-  getInventoryExpiryAlert,
   getItemExpiryValue,
 } from '../utils/inventoryExpiry';
 
 /**
- * Shows "Expired" or "Expiring in N days" when expiry is within 30 days (or already past).
- * Informational only — does not block picking.
+ * Plain expiry date text after an item is picked. No alerts.
  */
-const ItemExpiryBadge = ({ item, style, showDate = true }) => {
+const ItemExpiryBadge = ({ item, style }) => {
+  const status = String(item?.status || '').toLowerCase();
+  if (!item || status !== 'scanned') return null;
   const expiryValue = getItemExpiryValue(item);
-  const alert = getInventoryExpiryAlert(expiryValue);
-  if (!alert) return null;
-
-  const isExpired = alert.status === 'expired';
+  if (!expiryValue) return null;
 
   return (
-    <View
-      style={[
-        styles.badge,
-        isExpired ? styles.badgeExpired : styles.badgeExpiring,
-        style,
-      ]}
-    >
-      <Ionicons
-        name={isExpired ? 'alert-circle' : 'time-outline'}
-        size={15}
-        color={isExpired ? '#B91C1C' : '#B45309'}
-      />
-      <Text style={[styles.label, isExpired ? styles.labelExpired : styles.labelExpiring]}>
-        {alert.label}
-      </Text>
-      {showDate && expiryValue ? (
-        <Text style={[styles.date, isExpired ? styles.labelExpired : styles.labelExpiring]}>
-          · {formatInventoryExpiryDisplay(expiryValue)}
-        </Text>
-      ) : null}
-    </View>
+    <Text style={[styles.text, style]}>
+      Expiry: {formatInventoryExpiryDisplay(expiryValue)}
+    </Text>
   );
 };
 
 const styles = StyleSheet.create({
-  badge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    marginTop: 8,
-  },
-  badgeExpired: {
-    backgroundColor: '#FEE2E2',
-    borderColor: '#FECACA',
-    borderWidth: 1,
-  },
-  badgeExpiring: {
-    backgroundColor: '#FEF3C7',
-    borderColor: '#FDE68A',
-    borderWidth: 1,
-  },
-  label: {
+  text: {
     fontSize: 13,
-    fontWeight: '700',
-  },
-  labelExpired: {
-    color: '#B91C1C',
-  },
-  labelExpiring: {
-    color: '#B45309',
-  },
-  date: {
-    fontSize: 12,
     fontWeight: '500',
+    color: '#475569',
+    marginTop: 6,
   },
 });
 
