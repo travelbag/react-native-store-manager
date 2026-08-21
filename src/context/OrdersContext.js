@@ -17,6 +17,7 @@ import {
   getUserFacingError,
   showUserFacingErrorDialog,
 } from '../utils/userFacingError';
+import { showAppDialog } from './DialogContext';
 import { useAuth } from './AuthContext';
 
 const OrdersContext = createContext();
@@ -563,6 +564,10 @@ export function OrdersProvider({ children }) {
   const myActiveClaimsRef = React.useRef(new Map());
   /** Full order snapshots for my claims — used to rehydrate if a poll omits the row. */
   const myClaimOrderSnapshotsRef = React.useRef(new Map());
+  /** orderId -> last known canonical status (detect cancel transitions from polls) */
+  const previousOrderStatusRef = React.useRef(new Map());
+  /** Cancel popups already shown this session */
+  const alertedCancelledOrderIdsRef = React.useRef(new Set());
   const pendingAwaitingAcceptanceRef = React.useRef(false);
   const pendingWatchIntervalRef = React.useRef(null);
   const handleNewOrderNotificationRef = React.useRef(null);
@@ -596,7 +601,34 @@ export function OrdersProvider({ children }) {
     claimedAwayOrderIdsRef.current = new Set();
     myActiveClaimsRef.current = new Map();
     myClaimOrderSnapshotsRef.current = new Map();
+    previousOrderStatusRef.current = new Map();
+    alertedCancelledOrderIdsRef.current = new Set();
   }, [manager?.storeId, manager?.id]);
+
+  const notifyPickerOrderCancelled = React.useCallback((orderId, extra = {}) => {
+    const id = normalizeValue(orderId);
+    if (!id) return;
+    if (alertedCancelledOrderIdsRef.current.has(id)) return;
+    alertedCancelledOrderIdsRef.current.add(id);
+
+    const reason = String(extra?.reason || '').trim();
+    showAppDialog(
+      'Order cancelled',
+      `Order #${id} has been cancelled. Do not continue picking this order.`,
+      [{ text: 'OK' }],
+      {
+        variant: 'warning',
+        icon: 'close-circle',
+        cancelable: false,
+        details: [
+          { label: 'Order ID', value: `#${id}`, icon: 'receipt-outline' },
+          reason
+            ? { label: 'Reason', value: reason, icon: 'information-circle-outline' }
+            : null,
+        ].filter(Boolean),
+      }
+    );
+  }, []);
 
   const rememberMyClaim = React.useCallback((orderId, claim = {}) => {
     const id = normalizeValue(orderId);
@@ -1269,6 +1301,24 @@ export function OrdersProvider({ children }) {
         }
       }
       previousPollOrderIdsRef.current = ids;
+
+      // Notify picker when an in-progress order flips to cancelled (poll / refresh path).
+      for (const order of managerVisibleOrders) {
+        const oid = String(order.orderId ?? order.id ?? '');
+        if (!oid) continue;
+        const status = canonicalizeOrderStatus(order.status ?? order.orderStatus);
+        const prevStatus = previousOrderStatusRef.current.get(oid);
+        previousOrderStatusRef.current.set(oid, status);
+        if (
+          status === 'cancelled' &&
+          prevStatus &&
+          prevStatus !== 'cancelled' &&
+          (isPendingNewOrderStatus(prevStatus) || isClaimedInProgressStatus(prevStatus))
+        ) {
+          notifyPickerOrderCancelled(oid);
+        }
+      }
+
       const signature = managerVisibleOrders
         .map((order) => {
           const id = String(order.orderId ?? order.id ?? '');
@@ -1289,6 +1339,7 @@ export function OrdersProvider({ children }) {
       emitNewOrderReceived,
       isOrderVisibleToManager,
       applyLocalClaimToOrder,
+      notifyPickerOrderCancelled,
       manager?.id,
     ],
   );
@@ -1652,34 +1703,35 @@ export function OrdersProvider({ children }) {
       const payloadStoreId = normalizeStoreIdValue(payload?.storeId);
       if (payloadStoreId && normalizedStoreId && payloadStoreId !== normalizedStoreId) return;
 
-      clearMyClaim(eventOrderId);
-
       const existingOrder = ordersRef.current.find(
         (order) => extractOrderIdValue(order) === eventOrderId
       );
-      const existingOrderStatus = normalizeStatusValue(
-        existingOrder?.status ?? existingOrder?.orderStatus
-      );
 
-      if (existingOrderStatus === ORDER_STATUS.ACCEPTED) {
-        dispatch({ type: ACTIONS.REMOVE_ORDER, payload: eventOrderId });
-      } else if (existingOrder) {
+      clearMyClaim(eventOrderId);
+
+      if (existingOrder) {
         dispatch({
           type: ACTIONS.ADD_ORDER,
           payload: {
             ...existingOrder,
             status: 'cancelled',
             orderStatus: 'cancelled',
-          backendStatus: 'cancelled',
+            backendStatus: 'cancelled',
           },
         });
       }
+      previousOrderStatusRef.current.set(eventOrderId, 'cancelled');
 
       DeviceEventEmitter.emit('orderCancelled', {
         orderId: eventOrderId,
         cancelledBy: payload?.cancelledBy || 'system',
         reason: payload?.reason || '',
         trackingActive: Boolean(payload?.trackingActive),
+      });
+
+      // Show picker a clear popup with order ID (deduped per session).
+      notifyPickerOrderCancelled(eventOrderId, {
+        reason: payload?.reason || '',
       });
     };
 
@@ -1948,6 +2000,7 @@ export function OrdersProvider({ children }) {
     applyLocalClaimToOrder,
     rememberMyClaim,
     clearMyClaim,
+    notifyPickerOrderCancelled,
   ]);
 
   // Helpers to control sync polling manually (exposed via context for advanced control)

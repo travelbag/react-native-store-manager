@@ -132,12 +132,13 @@ const OrderPicking = ({ route, navigation }) => {
         if (currentOrder && String(currentOrder.status || currentOrder.orderStatus || '').toLowerCase() === 'cancelled') {
           showAppDialog(
             'Order cancelled',
-            'This order was cancelled, so picking has been stopped.',
+            `Order #${orderId} has been cancelled. Picking has been stopped.`,
             [{ text: 'OK', onPress: () => navigation.goBack() }],
             {
               variant: 'warning',
+              icon: 'close-circle',
               cancelable: false,
-              details: [{ label: 'Order', value: `#${orderId}`, icon: 'receipt-outline' }],
+              details: [{ label: 'Order ID', value: `#${orderId}`, icon: 'receipt-outline' }],
             }
           );
         }
@@ -393,24 +394,8 @@ const OrderPicking = ({ route, navigation }) => {
       const cancelledOrderId = String(payload?.orderId || '').trim();
       if (!cancelledOrderId || cancelledOrderId !== currentOrderId) return;
 
-      showAppDialog(
-        'Order cancelled',
-        'Stop packing this order immediately.',
-        [
-          {
-            text: 'OK',
-            onPress: () => navigation.navigate('OrdersList', { selectedTab: ORDER_STATUS.ACCEPTED }),
-          },
-        ],
-        {
-          variant: 'error',
-          icon: 'close-circle',
-          cancelable: false,
-          details: payload?.reason
-            ? [{ label: 'Reason', value: payload.reason, icon: 'information-circle-outline' }]
-            : undefined,
-        }
-      );
+      // Popup with Order ID is shown centrally; leave picking and open Cancelled tab.
+      navigation.navigate('OrdersList', { selectedTab: 'cancelled' });
     });
 
     return () => {

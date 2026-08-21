@@ -12,16 +12,15 @@ import { Ionicons } from '@expo/vector-icons';
 import { useOrders, ORDER_STATUS, isPickupFulfillmentOrder, isPickupReadyOrder, isPickupCompletedOrder, isPendingNewOrderStatus } from '../context/OrdersContext';
 import { useAuth } from '../context/AuthContext';
 import OrderCard from '../components/OrderCard';
-import { showAppDialog } from '../context/DialogContext';
 import { useFocusEffect } from '@react-navigation/native';
 import { AppState } from 'react-native';
 
 const OrdersScreen = ({ route, navigation }) => {
   const { orders, loading, error, refreshOrders } = useOrders();
   const { manager } = useAuth();
+  // Cancelled-order alerts are handled centrally in OrdersContext (with Order ID).
   const [selectedFilter, setSelectedFilter] = useState(ORDER_STATUS.PENDING);
   const [refreshing, setRefreshing] = useState(false);
-  const [alertedCancelledOrders, setAlertedCancelledOrders] = useState(new Set()); // Track alerted order IDs to prevent duplicates
   const insets = useSafeAreaInsets();
 
   // Handle navigation parameter to set the selected tab
@@ -32,34 +31,6 @@ const OrdersScreen = ({ route, navigation }) => {
       route.params.selectedTab = undefined;
     }
   }, [route?.params?.selectedTab]);
-
-  // Detect newly cancelled orders and show alert (only once per order, for current orders not yet assigned/delivered)
-  useEffect(() => {
-    const currentOrders = Array.isArray(orders) ? orders : [];
-    const cancelledOrders = currentOrders.filter(order => {
-      const orderId = order?.id || order?.orderId;
-      const currentStatus = String(order?.status || order?.orderStatus || '').toLowerCase();
-      // Only alert for cancelled orders that are "current" (not yet assigned or delivered)
-      const isCurrentOrder = ['pending', 'accepted', 'ready'].includes(currentStatus); // Adjust if needed based on your workflow
-      return currentStatus === 'cancelled' && isCurrentOrder && !alertedCancelledOrders.has(orderId);
-    });
-
-    // Show alert for each qualifying cancelled order (only once)
-    cancelledOrders.forEach(order => {
-      const orderId = order?.id || order?.orderId;
-      showAppDialog(
-        'Order cancelled',
-        'This order was cancelled by the customer.',
-        [{ text: 'OK' }],
-        {
-          variant: 'warning',
-          details: [{ label: 'Order', value: `#${orderId}`, icon: 'receipt-outline' }],
-        }
-      );
-      // Mark as alerted to prevent future duplicates
-      setAlertedCancelledOrders(prev => new Set(prev).add(orderId));
-    });
-  }, [orders, alertedCancelledOrders]); // Runs whenever orders change
 
   const safeOrders = Array.isArray(orders) ? orders : [];
   // Normalize status for filtering (keep in sync with OrdersContext canonicalize aliases)
